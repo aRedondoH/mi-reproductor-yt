@@ -189,6 +189,7 @@ def main(page: ft.Page):
                     on_click=lambda e, idx=i: page.run_task(reproducir_indice, idx)
                 )
             )
+        page.update()
            
     url_input = ft.TextField(
         label="Enlace de la lista de reproducción",
@@ -198,7 +199,8 @@ def main(page: ft.Page):
 
     status_text = ft.Text("Listo para descargar", size=14)
     progress_bar = ft.ProgressBar(width=400, value=0, visible=False)
-    log_column = ft.Column(scroll=ft.ScrollMode.AUTO, expend=True)
+    log_column = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
+
     
     # Candado para evitar conflictos visuales entre hilos
     ui_lock = threading.Lock()
@@ -209,7 +211,6 @@ def main(page: ft.Page):
             page.update()
 
     def descargar_playlist(url, max_hilos):
-        ruta_destino = "/storage/emulated/0/Download" if os.path.exists("/storage/emulated/0/Download") else "./descargas"
         os.makedirs(ruta_destino, exist_ok=True)
 
         status_text.value = "Extrayendo canciones de la lista..."
@@ -256,7 +257,6 @@ def main(page: ft.Page):
         # 2. Función que ejecutará cada hilo individualmente
         def descargar_una(video_url):
             nonlocal completadas
-            carpeta_actual = carpeta_input.value.strip()
             os.makedirs(ruta_actual, exist_ok=True)
             ydl_opts = {
                 'format': 'bestaudio[ext=m4a]/bestaudio',
