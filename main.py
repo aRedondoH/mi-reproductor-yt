@@ -130,14 +130,18 @@ def main(page: ft.Page):
         actualizar_lista_ui()
 
     async def toggle_play_pause(e):
-        if not canciones_locales:
-            return
         if indice_actual == -1:
-            await reproducir_indice(0)
-        elif esta_reproduciendo:
+            if canciones_locales:
+                await reproducir_indice(0)
+            return
+
+        if esta_reproduciendo:
             await audio_player.pause()
         else:
             await audio_player.resume()
+
+
+    
 
     async def siguiente_cancion(e):
         if canciones_locales:
@@ -283,7 +287,7 @@ def main(page: ft.Page):
                     completadas += 1
                     progress_bar.value = completadas / total
                     status_text.value = f"Progreso: {completadas} de {total} completadas"
-                    escanear_canciones()
+                    
                     page.update()
                     
 
@@ -291,6 +295,7 @@ def main(page: ft.Page):
         with ThreadPoolExecutor(max_workers=max_hilos) as executor:
             executor.map(descargar_una, urls_videos)
 
+        escanear_canciones()
         status_text.value = f"¡Finalizado! Se procesaron {total} elementos."
         btn_descargar.disabled = False
         page.update()
@@ -311,7 +316,7 @@ def main(page: ft.Page):
 
     btn_descargar = ft.Button("Descargar Todo", icon=ft.Icons.DOWNLOAD, on_click=iniciar_click)
 
-    escanear_canciones()  # <-- AÑADIR ANTES DE page.add
+    # escanear_canciones()  # <-- AÑADIR ANTES DE page.add
     vista_biblioteca = ft.Container(
         padding=ft.Padding.symmetric(horizontal=12, vertical=8),
         expand=True,
