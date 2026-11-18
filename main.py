@@ -13,71 +13,45 @@ import yt_dlp
 import threading
 import os
 import flet_audio as fta
+import flet_permission_handler as fph
 from concurrent.futures import ThreadPoolExecutor
 
 def main(page: ft.Page):
     page.title = "Descargador Paralelo"
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.padding = 20
-    page.scroll = ft.ScrollMode.ADAPTIVE
+    page.theme_mode = ft.ThemeMode.DARK
+    page.padding = 0
 
-    
+    permisos = fph.PermissionHandler()
+    page.services.append(permisos) if hasattr(page, "services") else page.overlay.append(permisos)
+
     raiz_storage = "/storage/emulated/0" if os.path.exists("/storage/emulated/0") else os.path.abspath(".")
-    ruta_inicial = os.path.join(raiz_storage, "Download") if os.path.exists("/storage/emulated/0") else os.path.join(raiz_storage, "descargas")
-    os.makedirs(ruta_inicial, exist_ok=True)
+    ruta_actual = os.path.join(raiz_storage, "Download") if os.path.exists("/storage/emulated/0") else os.path.join(raiz_storage, "descargas")
+    os.makedirs(ruta_actual, exist_ok=True)
 
-    def cambiar_carpeta(e):
-        nueva_ruta = carpeta_input.value.strip()
+    lbl_ruta_actual = ft.Text(ruta_actual, size=12, color=ft.Colors.GREY_400, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True)
+
+    def establecer_carpeta(nueva_ruta):
+        nonlocal ruta_actual
         if os.path.isdir(nueva_ruta):
+            ruta_actual = nueva_ruta
+            lbl_ruta_actual.value = ruta_actual
             escanear_canciones()
-            status_text.value = f"Carpeta activa: {nueva_ruta}"
+            status_text.value = f"Carpeta: {os.path.basename(ruta_actual)}"
         else:
-            status_text.value = "La carpeta no existe."
+            status_text.value = "No se pudo acceder a la carpeta."
         page.update()
 
-    carpeta_input = ft.TextField(
-        label="Carpeta de música y descargas",
-        value=ruta_inicial,
-        expand=True,
-        on_submit=cambiar_carpeta
-    )
-    btn_aplicar_carpeta = ft.IconButton(
-        icon=ft.Icons.FOLDER_OPEN,
-        tooltip="Cargar carpeta",
-        on_click=cambiar_carpeta
-    )
+    async def abrir_selector_carpeta(e):
+        await permisos.request_permission(fph.PermissionType.AUDIO)
+        await permisos.request_permission(fph.PermissionType.STORAGE)
+        ruta_elegida = await file_picker.get_directory_path(dialog_title="Selecciona carpeta de música")
+        if ruta_elegida:
+            establecer_carpeta(ruta_elegida)
 
-    def seleccionar_rapido(e):
-        if carpetas_dropdown.value:
-            carpeta_input.value = carpetas_dropdown.value
-            cambiar_carpeta(None)
+    file_picker = ft.FilePicker()
+    page.services.append(file_picker) if hasattr(page, "services") else page.overlay.append(file_picker)
 
-    # Detecta automáticamente las carpetas habituales que existan en tu dispositivo
-    # rutas_posibles = [
-    #     ("Descargas", os.path.join(raiz_storage, "Download")),
-    #     ("Música", os.path.join(raiz_storage, "Music")),
-    #     ("Documentos", os.path.join(raiz_storage, "Documents")),
-    #     ("Carpeta App", os.path.join(raiz_storage, "descargas")),
-    # ]
-    base_carpetas = "/storage/emulated/0" if os.path.exists("/storage/emulated/0") else os.path.expanduser("~")
-    rutas_posibles = [
-        ("Descargas", os.path.join(base_carpetas, "Download" if os.path.exists("/storage/emulated/0") else "Downloads")),
-        ("Música", os.path.join(base_carpetas, "Music")),
-        ("Carpeta App", os.path.join(raiz_storage, "descargas")),
-    ]
-
-    opciones_carpetas = [
-        ft.dropdown.Option(key=ruta, text=nombre)
-        for nombre, ruta in rutas_posibles
-        if os.path.exists(ruta)
-    ]
-
-    carpetas_dropdown = ft.Dropdown(
-        label="Acceso rápido",
-        width=150,
-        options=opciones_carpetas,
-        on_select=seleccionar_rapido
-    )
 
 
     canciones_locales = []
@@ -89,7 +63,7 @@ def main(page: ft.Page):
     lbl_tiempo = ft.Text("00:00 / 00:00", size=12)
     slider_progreso = ft.Slider(min=0, max=100, value=0, expand=True)
     btn_play_pause = ft.IconButton(icon=ft.Icons.PLAY_ARROW, icon_size=32)
-    lista_canciones_ui = ft.ListView(height=200, spacing=5)
+    lista_canciones_ui = ft.ListView(expand=True, spacing=4)
 
     def formatear_tiempo(ms):
         if not ms or ms < 0:
@@ -141,7 +115,7 @@ def main(page: ft.Page):
         slider_progreso.value = 0
         await audio_player.pause()
         # audio_player.src = f"/{nombre}"
-        ruta_completa = os.path.join(carpeta_input.value.strip(), nombre)
+        ruta_completa = os.path.join(ruta_actual, nombre)
 #        ruta_relativa = os.path.relpath(ruta_completa, raiz_storage).replace("\\", "/")
 #        audio_player.src = f"/{ruta_relativa}"
 #        ruta_completa = os.path.join(carpeta_input.value.strip(), nombre)
@@ -184,14 +158,24 @@ def main(page: ft.Page):
 
     def escanear_canciones(e=None):
         nonlocal canciones_locales
-        carpeta_actual = carpeta_input.value.strip()
-        if not os.path.isdir(carpeta_actual):
+        exts = (".m4a", ".mp3", ".webm", ".opus", ".ogg", ".wav", ".flac", ".aac")
+        try:
+            archivos = [
+                f for f in os.listdir(ruta_actual)
+                if os.path.isfile(os.path.join(ruta_actual, f)) and f.lower().endswith(exts)
+            ]
+            archivos.sort(key=lambda x: os.path.getmtime(os.path.join(ruta_actual, x)), reverse=True)
+            canciones_locales = archivos
+        except Exception as err:
+            canciones_locales = []
+            lista_canciones_ui.controls.clear()
+            lista_canciones_ui.controls.append(
+                ft.Text(f"Sin permiso para leer carpeta. Pulsa 'Elegir carpeta' o activa Audio en Ajustes. ({err})", color=ft.Colors.RED_300, size=12)
+            )
+            page.update()
             return
-        exts = (".m4a", ".mp3", ".webm", ".opus", ".ogg", ".wav")
-        archivos = [f for f in os.listdir(carpeta_actual) if f.lower().endswith(exts)]
-        archivos.sort(key=lambda x: os.path.getmtime(os.path.join(carpeta_actual, x)), reverse=True)
-        canciones_locales = archivos
         actualizar_lista_ui()
+
 
 
     def actualizar_lista_ui():
@@ -214,7 +198,7 @@ def main(page: ft.Page):
 
     status_text = ft.Text("Listo para descargar", size=14)
     progress_bar = ft.ProgressBar(width=400, value=0, visible=False)
-    log_column = ft.Column(scroll=ft.ScrollMode.AUTO, height=120)
+    log_column = ft.Column(scroll=ft.ScrollMode.AUTO, expend=True)
     
     # Candado para evitar conflictos visuales entre hilos
     ui_lock = threading.Lock()
@@ -273,14 +257,15 @@ def main(page: ft.Page):
         def descargar_una(video_url):
             nonlocal completadas
             carpeta_actual = carpeta_input.value.strip()
-            os.makedirs(carpeta_actual, exist_ok=True)
+            os.makedirs(ruta_actual, exist_ok=True)
             ydl_opts = {
                 'format': 'bestaudio[ext=m4a]/bestaudio',
-                'outtmpl': f'{carpeta_actual}/%(title)s.%(ext)s',
+                'outtmpl': f'{ruta_actual}/%(title)s.%(ext)s',
                 'ignoreerrors': True,
                 'quiet': True,
                 'no_warnings': True
             }
+
             
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -323,40 +308,76 @@ def main(page: ft.Page):
     btn_descargar = ft.Button("Descargar Todo", icon=ft.Icons.DOWNLOAD, on_click=iniciar_click)
 
     escanear_canciones()  # <-- AÑADIR ANTES DE page.add
+    vista_biblioteca = ft.Container(
+        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+        expand=True,
+        content=ft.Column([
+            ft.Row([
+                ft.ElevatedButton("Elegir carpeta", icon=ft.Icons.FOLDER_OPEN, on_click=abrir_selector_carpeta),
+                ft.IconButton(icon=ft.Icons.MUSIC_NOTE, tooltip="Music", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Music"))),
+                ft.IconButton(icon=ft.Icons.DOWNLOAD, tooltip="Download", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Download"))),
+                ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Actualizar", on_click=escanear_canciones),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Row([ft.Icon(ft.Icons.FOLDER, size=14, color=ft.Colors.GREY_400), lbl_ruta_actual]),
+            ft.Divider(height=1),
+            lista_canciones_ui
+        ], expand=True, spacing=8)
+    )
+
+    vista_descargador = ft.Container(
+        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+        expand=True,
+        content=ft.Column([
+            ft.Row([url_input]),
+            ft.Row([btn_descargar, status_text], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            progress_bar,
+            ft.Divider(height=1),
+            log_column
+        ], expand=True, spacing=10)
+    )
+
+    tabs = ft.Tabs(
+        selected_index=0,
+        expand=True,
+        tabs=[
+            ft.Tab(text="Mi Música", icon=ft.Icons.LIBRARY_MUSIC, content=vista_biblioteca),
+            ft.Tab(text="Descargar", icon=ft.Icons.CLOUD_DOWNLOAD, content=vista_descargador),
+        ]
+    )
+
+    barra_reproductor = ft.Container(
+        padding=ft.padding.only(left=14, right=14, top=8, bottom=10),
+        bgcolor=ft.Colors.GREY_900,
+        border=ft.border.only(top=ft.BorderSide(1, ft.Colors.GREY_800)),
+        content=ft.Column([
+            ft.Row([ft.Container(content=lbl_cancion_actual, expand=True), lbl_tiempo]),
+            slider_progreso,
+            ft.Row([
+                ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=anterior_cancion),
+                btn_play_pause,
+                ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=siguiente_cancion),
+            ], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
+        ], spacing=0)
+    )
+
+    async def inicializar_app():
+        await permisos.request_permission(fph.PermissionType.AUDIO)
+        await permisos.request_permission(fph.PermissionType.STORAGE)
+        carpeta_music = os.path.join(raiz_storage, "Music")
+        if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
+            establecer_carpeta(carpeta_music)
+        else:
+            escanear_canciones()
+
     page.add(
-        ft.Text("Descargador Paralelo", size=24, weight=ft.FontWeight.BOLD),
-        ft.Row([url_input]),
-        btn_descargar,
-        status_text,
-        progress_bar,
-        ft.Divider(),
-        log_column,  # <-- Aquí faltaba esta coma
-        ft.Divider(),
-        ft.Row([
-            ft.Text("Música Local", size=18, weight=ft.FontWeight.BOLD, expand=True),
-            ft.IconButton(icon=ft.Icons.REFRESH, on_click=escanear_canciones)
-        ]),
-        # ft.Row([carpetas_dropdown, carpeta_input, btn_aplicar_carpeta]),
-        ft.Row([carpetas_dropdown, btn_aplicar_carpeta]),
-        ft.Row([carpeta_input]),
-
-
-        lista_canciones_ui,
-        ft.Container(
-            padding=10,
-            border_radius=10,
-            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-            content=ft.Column([
-                ft.Row([ft.Container(content=lbl_cancion_actual, expand=True), lbl_tiempo]),
-                slider_progreso,
-                ft.Row([
-                    ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS, on_click=anterior_cancion),
-                    btn_play_pause,
-                    ft.IconButton(icon=ft.Icons.SKIP_NEXT, on_click=siguiente_cancion),
-                ], alignment=ft.MainAxisAlignment.CENTER)
-            ], spacing=2)
+        ft.SafeArea(
+            expand=True,
+            content=ft.Column([tabs, barra_reproductor], expand=True, spacing=0)
         )
     )
+
+    page.run_task(inicializar_app)
+
 
 
 raiz_assets = "/storage/emulated/0" if os.path.exists("/storage/emulated/0") else os.path.abspath(".")
