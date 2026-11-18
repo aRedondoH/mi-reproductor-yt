@@ -5,9 +5,6 @@ Created on Wed Nov 18 09:25:24 2026
 @author: Arh
 """
 
-
-import nest_asyncio
-nest_asyncio.apply()
 import flet as ft
 import yt_dlp
 import threading
@@ -160,9 +157,10 @@ def main(page: ft.Page):
         arrastrando_slider = False
         await audio_player.seek(int(e.control.value))
 
-    btn_play_pause.on_click = toggle_play_pause
+    btn_play_pause.on_click = lambda e: page.run_task(toggle_play_pause, e)
     slider_progreso.on_change_start = on_slider_start
-    slider_progreso.on_change_end = on_slider_end
+    # slider_progreso.on_change_end = on_slider_end
+    slider_progreso.on_change_end = lambda e: page.run_task(on_slider_end, e)
 
     def escanear_canciones(e=None):
         nonlocal canciones_locales
@@ -378,9 +376,12 @@ def main(page: ft.Page):
             ft.Row([ft.Container(content=lbl_cancion_actual, expand=True), lbl_tiempo]),
             slider_progreso,
             ft.Row([
-                ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=anterior_cancion),
+                ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(anterior_cancion, e)),
                 btn_play_pause,
-                ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=siguiente_cancion),
+                ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(siguiente_cancion, e)),
+                # ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=anterior_cancion),
+                # btn_play_pause,
+                # ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=siguiente_cancion),
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
         ], spacing=0)
     )
