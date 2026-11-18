@@ -19,6 +19,8 @@ def main(page: ft.Page):
     page.title = "Descargador Paralelo"
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
     page.padding = 20
+    page.scroll = ft.ScrollMode.ADAPTIVE
+
     
     raiz_storage = "/storage/emulated/0" if os.path.exists("/storage/emulated/0") else os.path.abspath(".")
     ruta_inicial = os.path.join(raiz_storage, "Download") if os.path.exists("/storage/emulated/0") else os.path.join(raiz_storage, "descargas")
@@ -212,7 +214,7 @@ def main(page: ft.Page):
 
     status_text = ft.Text("Listo para descargar", size=14)
     progress_bar = ft.ProgressBar(width=400, value=0, visible=False)
-    log_column = ft.Column(scroll=ft.ScrollMode.AUTO, height=250)
+    log_column = ft.Column(scroll=ft.ScrollMode.AUTO, height=120)
     
     # Candado para evitar conflictos visuales entre hilos
     ui_lock = threading.Lock()
@@ -334,7 +336,10 @@ def main(page: ft.Page):
             ft.Text("Música Local", size=18, weight=ft.FontWeight.BOLD, expand=True),
             ft.IconButton(icon=ft.Icons.REFRESH, on_click=escanear_canciones)
         ]),
-        ft.Row([carpetas_dropdown, carpeta_input, btn_aplicar_carpeta]),
+        # ft.Row([carpetas_dropdown, carpeta_input, btn_aplicar_carpeta]),
+        ft.Row([carpetas_dropdown, btn_aplicar_carpeta]),
+        ft.Row([carpeta_input]),
+
 
         lista_canciones_ui,
         ft.Container(
