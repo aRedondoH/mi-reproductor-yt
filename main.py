@@ -309,7 +309,7 @@ def main(page: ft.Page):
 
     escanear_canciones()  # <-- AÑADIR ANTES DE page.add
     vista_biblioteca = ft.Container(
-        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
         expand=True,
         content=ft.Column([
             ft.Row([
@@ -325,7 +325,7 @@ def main(page: ft.Page):
     )
 
     vista_descargador = ft.Container(
-        padding=ft.padding.symmetric(horizontal=12, vertical=8),
+        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
         expand=True,
         content=ft.Column([
             ft.Row([url_input]),
@@ -346,9 +346,9 @@ def main(page: ft.Page):
     )
 
     barra_reproductor = ft.Container(
-        padding=ft.padding.only(left=14, right=14, top=8, bottom=10),
+        padding=ft.Padding.only(left=14, right=14, top=8, bottom=10),
         bgcolor=ft.Colors.GREY_900,
-        border=ft.border.only(top=ft.BorderSide(1, ft.Colors.GREY_800)),
+        border=ft.Border.only(top=ft.BorderSide(1, ft.Colors.GREY_800)),
         content=ft.Column([
             ft.Row([ft.Container(content=lbl_cancion_actual, expand=True), lbl_tiempo]),
             slider_progreso,
