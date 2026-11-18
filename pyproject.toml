@@ -10,11 +10,10 @@ dependencies = [
     "nest-asyncio"
 ]
 
-[tool.flet.android]
-permission = [
-    "android.permission.INTERNET",
-    "android.permission.READ_EXTERNAL_STORAGE",
-    "android.permission.WRITE_EXTERNAL_STORAGE",
-    "android.permission.READ_MEDIA_AUDIO",
-    "android.permission.WAKE_LOCK"
-]
+[tool.flet.android.permission]
+"android.permission.INTERNET" = true
+"android.permission.READ_EXTERNAL_STORAGE" = true
+"android.permission.WRITE_EXTERNAL_STORAGE" = true
+"android.permission.READ_MEDIA_AUDIO" = true
+"android.permission.WAKE_LOCK" = true
+
