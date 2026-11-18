@@ -43,11 +43,15 @@ def main(page: ft.Page):
         page.update()
 
     async def abrir_selector_carpeta(e):
-        await permisos.request_permission(fph.PermissionType.AUDIO)
-        await permisos.request_permission(fph.PermissionType.STORAGE)
+        try:
+            await permisos.request(fph.Permission.AUDIO)
+            await permisos.request(fph.Permission.STORAGE)
+        except Exception:
+            pass
         ruta_elegida = await file_picker.get_directory_path(dialog_title="Selecciona carpeta de música")
         if ruta_elegida:
             establecer_carpeta(ruta_elegida)
+
 
     file_picker = ft.FilePicker()
     page.services.append(file_picker) if hasattr(page, "services") else page.overlay.append(file_picker)
@@ -111,7 +115,7 @@ def main(page: ft.Page):
             return
         indice_actual = idx
         nombre = canciones_locales[indice_actual]
-        lbl_cancion_actual.value = os.path.splitext(nombre)
+        lbl_cancion_actual.value = os.path.splitext(nombre)[0]
         slider_progreso.value = 0
         await audio_player.pause()
         # audio_player.src = f"/{nombre}"
@@ -185,7 +189,7 @@ def main(page: ft.Page):
             lista_canciones_ui.controls.append(
                 ft.ListTile(
                     leading=ft.Icon(ft.Icons.GRAPHIC_EQ if es_actual else ft.Icons.MUSIC_NOTE),
-                    title=ft.Text(os.path.splitext(archivo), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    title=ft.Text(os.path.splitext(archivo)[0], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                     on_click=lambda e, idx=i: page.run_task(reproducir_indice, idx)
                 )
             )
@@ -313,7 +317,7 @@ def main(page: ft.Page):
         expand=True,
         content=ft.Column([
             ft.Row([
-                ft.ElevatedButton("Elegir carpeta", icon=ft.Icons.FOLDER_OPEN, on_click=abrir_selector_carpeta),
+                ft.Button("Elegir carpeta", icon=ft.Icons.FOLDER_OPEN, on_click=abrir_selector_carpeta),
                 ft.IconButton(icon=ft.Icons.MUSIC_NOTE, tooltip="Music", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Music"))),
                 ft.IconButton(icon=ft.Icons.DOWNLOAD, tooltip="Download", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Download"))),
                 ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Actualizar", on_click=escanear_canciones),
@@ -338,12 +342,28 @@ def main(page: ft.Page):
 
     tabs = ft.Tabs(
         selected_index=0,
+        length=2,
         expand=True,
-        tabs=[
-            ft.Tab(text="Mi Música", icon=ft.Icons.LIBRARY_MUSIC, content=vista_biblioteca),
-            ft.Tab(text="Descargar", icon=ft.Icons.CLOUD_DOWNLOAD, content=vista_descargador),
-        ]
+        content=ft.Column(
+            expand=True,
+            controls=[
+                ft.TabBar(
+                    tabs=[
+                        ft.Tab(label="Mi Música", icon=ft.Icons.LIBRARY_MUSIC),
+                        ft.Tab(label="Descargar", icon=ft.Icons.CLOUD_DOWNLOAD),
+                    ]
+                ),
+                ft.TabBarView(
+                    expand=True,
+                    controls=[
+                        vista_biblioteca,
+                        vista_descargador,
+                    ],
+                ),
+            ],
+        ),
     )
+
 
     barra_reproductor = ft.Container(
         padding=ft.Padding.only(left=14, right=14, top=8, bottom=10),
@@ -361,13 +381,20 @@ def main(page: ft.Page):
     )
 
     async def inicializar_app():
-        await permisos.request_permission(fph.PermissionType.AUDIO)
-        await permisos.request_permission(fph.PermissionType.STORAGE)
+        try:
+            await permisos.request(fph.Permission.AUDIO)
+            await permisos.request(fph.Permission.STORAGE)
+        except Exception:
+            pass
         carpeta_music = os.path.join(raiz_storage, "Music")
-        if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
-            establecer_carpeta(carpeta_music)
-        else:
-            escanear_canciones()
+        try:
+            if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
+                establecer_carpeta(carpeta_music)
+                return
+        except Exception:
+            pass
+        escanear_canciones()
+
 
     page.add(
         ft.SafeArea(
