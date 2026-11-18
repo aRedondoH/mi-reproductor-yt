@@ -1,0 +1,20 @@
+[project]
+name = "descargador-reproductor"
+version = "1.0.0"
+description = "Descargador y reproductor local"
+requires-python = ">=3.10"
+dependencies = [
+    "flet",
+    "flet-audio",
+    "yt-dlp",
+    "nest-asyncio"
+]
+
+[tool.flet.android]
+permission = [
+    "android.permission.INTERNET",
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.READ_MEDIA_AUDIO",
+    "android.permission.WAKE_LOCK"
+]
