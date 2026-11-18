@@ -42,7 +42,7 @@ def main(page: ft.Page):
             status_text.value = "No se pudo acceder a la carpeta."
         page.update()
 
-    async def abrir_selector_carpeta(e):
+    async def abrir_selector_carpeta(e=None):
         try:
             await permisos.request(fph.Permission.AUDIO)
             await permisos.request(fph.Permission.STORAGE)
@@ -317,7 +317,7 @@ def main(page: ft.Page):
         expand=True,
         content=ft.Column([
             ft.Row([
-                ft.Button("Elegir carpeta", icon=ft.Icons.FOLDER_OPEN, on_click=abrir_selector_carpeta),
+                ft.Button("Elegir carpeta", icon=ft.Icons.FOLDER_OPEN, on_click=lambda _: page.run_task(abrir_selector_carpeta)),
                 ft.IconButton(icon=ft.Icons.MUSIC_NOTE, tooltip="Music", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Music"))),
                 ft.IconButton(icon=ft.Icons.DOWNLOAD, tooltip="Download", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Download"))),
                 ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Actualizar", on_click=escanear_canciones),
