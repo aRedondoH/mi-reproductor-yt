@@ -211,7 +211,7 @@ def main(page: ft.Page):
             page.update()
 
     def descargar_playlist(url, max_hilos):
-        os.makedirs(ruta_destino, exist_ok=True)
+        os.makedirs(ruta_actual, exist_ok=True)
 
         status_text.value = "Extrayendo canciones de la lista..."
         progress_bar.visible = True
