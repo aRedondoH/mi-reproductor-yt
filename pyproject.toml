@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "flet",
     "flet-audio",
+    "flet-permission-handler",
     "yt-dlp",
     "nest-asyncio"
 ]
@@ -15,5 +16,6 @@ dependencies = [
 "android.permission.READ_EXTERNAL_STORAGE" = true
 "android.permission.WRITE_EXTERNAL_STORAGE" = true
 "android.permission.READ_MEDIA_AUDIO" = true
+"android.permission.MANAGE_EXTERNAL_STORAGE" = true
 "android.permission.WAKE_LOCK" = true
 
