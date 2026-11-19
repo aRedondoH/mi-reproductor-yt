@@ -257,20 +257,18 @@ def main(page: ft.Page):
             page.run_task(actualizar_notificacion_bloqueo)
 
     
-
     audio_player = fta.Audio(
         autoplay=False,
         release_mode=fta.ReleaseMode.STOP,
         context=fta.AudioContext(
             focus=fta.AudioFocus.GAIN,
-            content_type=fta.AudioContentType.MUSIC,
-            usage=fta.AudioUsage.MEDIA,
-            stay_awake=True,
+            respect_silence=False,
         ),
         on_position_change=on_position_changed,
         on_duration_change=on_duration_changed,
         on_state_change=on_state_changed,
     )
+
     page.services.append(audio_player) if hasattr(page, "services") else page.overlay.append(audio_player)
 
 
