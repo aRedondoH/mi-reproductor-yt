@@ -11,7 +11,13 @@ import threading
 import os
 import flet_audio as fta
 import flet_permission_handler as fph
-import flet_notifications as ftn 
+try:
+    import flet_notifications as ftn
+    TIENE_NOTIFICACIONES = True
+except ImportError:
+    ftn = None
+    TIENE_NOTIFICACIONES = False
+ 
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -39,7 +45,7 @@ def main(page: ft.Page):
         if indice_actual < 0 or indice_actual >= len(canciones_locales):
             return
 
-        titulo = os.path.splitext(canciones_locales[indice_actual])
+        titulo = os.path.splitext(canciones_locales[indice_actual])[0]
         texto_play = "⏸ Pausar" if esta_reproduciendo else "▶ Reproducir"
 
         await notificaciones.show(
@@ -76,6 +82,7 @@ def main(page: ft.Page):
                 )
             ),
         )
+
 
     
     
@@ -339,10 +346,49 @@ def main(page: ft.Page):
     # Candado para evitar conflictos visuales entre hilos
     ui_lock = threading.Lock()
 
-    def log(mensaje):
+    def log(mensaje, ok=True, miniatura=None):
         with ui_lock:
-            log_column.controls.append(ft.Text(mensaje, size=12))
+            if miniatura:
+                icono_izq = ft.Image(
+                    src=miniatura,
+                    width=28,
+                    height=28,
+                    fit=ft.BoxFit.COVER,
+                    border_radius=4,
+                    error_content=ft.Icon(ft.Icons.MUSIC_NOTE, size=20, color=ft.Colors.BLUE_300),
+                )
+            else:
+                icono_izq = ft.Icon(
+                    ft.Icons.MUSIC_NOTE if ok else ft.Icons.ERROR_OUTLINE,
+                    size=20,
+                    color=ft.Colors.BLUE_300 if ok else ft.Colors.RED_400,
+                )
+
+            icono_estado = ft.Icon(
+                ft.Icons.CHECK_CIRCLE if ok else ft.Icons.CANCEL,
+                size=16,
+                color=ft.Colors.GREEN_400 if ok else ft.Colors.RED_400,
+            )
+
+            log_column.controls.append(
+                ft.Row(
+                    controls=[
+                        icono_izq,
+                        ft.Text(
+                            mensaje,
+                            size=12,
+                            expand=True,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                        icono_estado,
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
             page.update()
+
 
     def descargar_playlist(url, max_hilos):
         os.makedirs(ruta_actual, exist_ok=True)
@@ -420,7 +466,8 @@ def main(page: ft.Page):
             os.makedirs(ruta_actual, exist_ok=True)
             ydl_opts = {
                 'format': 'bestaudio[ext=m4a]/bestaudio',
-                'outtmpl': f'{ruta_actual}/%(title)s.%(ext)s',
+                'outtmpl': os.path.join(ruta_actual, '%(title)s.%(ext)s'),
+                'restrictfilenames': True,
                 'ignoreerrors': False,
                 'quiet': True,
                 'no_warnings': True,
@@ -435,16 +482,18 @@ def main(page: ft.Page):
                     if not os.path.exists(ruta_archivo):
                         raise Exception("El archivo no se guardó en el dispositivo.")
                     titulo = info_video.get('title', 'Canción')
-                    log(f"✔ {titulo}")
+                    miniatura = info_video.get('thumbnail')
+                    log(f"{titulo} — OK", ok=True, miniatura=miniatura)
             except Exception as e:
                 msg_error = str(e).replace("ERROR: ", "").strip()
-                log(f"✖ Error ({video_url}): {msg_error[:80]}")
+                log(f"Error ({video_url}): {msg_error[:80]}", ok=False)
             finally:
                 with ui_lock:
                     completadas += 1
                     progress_bar.value = completadas / total
                     status_text.value = f"Progreso: {completadas} de {total} completadas"
                     page.update()
+
         
                     
 
