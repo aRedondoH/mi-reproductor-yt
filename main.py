@@ -22,6 +22,16 @@ import flet_notifications as ftn  # <-- AÑADIR ARRIBA (requiere: pip install fl
 import asyncio
 import urllib.parse
 import urllib.request
+import ssl
+
+try:
+    import certifi
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+except Exception:
+    pass
+ssl._create_default_https_context = ssl._create_unverified_context
+
 
 try:
     import flet_video as ftv
@@ -399,6 +409,7 @@ def main(page: ft.Page):
             return
         descargando_caratulas = True
         btn_caratulas.disabled = True
+        status_text.value = "Buscando carátulas..."
         page.update()
         try:
             carpeta_actual_snap = ruta_actual
@@ -421,16 +432,29 @@ def main(page: ft.Page):
                 if (carpeta_actual_snap, f) not in caratulas_buscadas and obtener_caratula(f) is None
             ]
             if not pendientes:
+                status_text.value = "Carátulas al día"
                 return
 
-            opts = {"extract_flat": "in_playlist", "quiet": True, "ignoreerrors": True}
+            opts = {
+                "extract_flat": True,
+                "quiet": True,
+                "no_warnings": True,
+                "ignoreerrors": True,
+                "nocheckcertificate": True,
+                "source_address": "0.0.0.0",
+                "socket_timeout": 10,
+            }
             yt_img_base = "https://" + "i.ytimg.com/vi/"
+            encontradas = 0
+
             with yt_dlp.YoutubeDL(opts) as ydl:
                 for idx_p, archivo in enumerate(pendientes):
                     if ruta_actual != carpeta_actual_snap:
                         break
                     caratulas_buscadas.add((carpeta_actual_snap, archivo))
                     base_nombre = os.path.splitext(archivo)[0]
+                    status_text.value = f"Carátula {idx_p + 1}/{len(pendientes)}..."
+                    page.update()
                     try:
                         info = ydl.extract_info(f"ytsearch1:{base_nombre}", download=False)
                         entries = [e for e in (info.get("entries") or []) if e] if info else []
@@ -447,15 +471,16 @@ def main(page: ft.Page):
                         ruta_audio = os.path.join(carpeta_actual_snap, archivo)
                         incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre)
                         if obtener_caratula(archivo):
+                            encontradas += 1
                             hubo_cambios = True
-                            if idx_p % 3 == 0:
-                                actualizar_lista_ui()
-                                hubo_cambios = False
+                            actualizar_lista_ui()
+                            hubo_cambios = False
                     except Exception:
                         continue
 
             if hubo_cambios and ruta_actual == carpeta_actual_snap:
                 actualizar_lista_ui()
+            status_text.value = f"Carátulas encontradas: {encontradas}"
         finally:
             descargando_caratulas = False
             btn_caratulas.disabled = False
@@ -465,7 +490,8 @@ def main(page: ft.Page):
         claves_carpeta = [k for k in caratulas_buscadas if k[0] == ruta_actual]
         for k in claves_carpeta:
             caratulas_buscadas.discard(k)
-        threading.Thread(target=descargar_caratulas_faltantes, daemon=True).start()
+        page.run_thread(descargar_caratulas_faltantes)
+
 
     def escanear_canciones(e=None):
         nonlocal canciones_locales
@@ -568,35 +594,39 @@ def main(page: ft.Page):
         with ui_lock:
             log_column.controls.append(ft.Text(mensaje, size=12))
             page.update()
-
+            
     def incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre):
-        try:
-            import urllib.request
-            from mutagen.mp4 import MP4, MP4Cover
-            from mutagen.id3 import ID3, APIC
+        os.makedirs(carpeta_caratulas, exist_ok=True)
+        datos_img = None
+        posible = ""
 
-            datos_img = None
-            # 1. Buscar si yt-dlp ya descargó una miniatura local
-            for ext in (".jpg", ".jpeg", ".png", ".webp"):
-                posible = os.path.join(carpeta_caratulas, base_nombre + ext)
-                if os.path.isfile(posible):
-                    with open(posible, "rb") as f:
-                        datos_img = f.read()
-                    break
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            ruta_test = os.path.join(carpeta_caratulas, base_nombre + ext)
+            if os.path.isfile(ruta_test):
+                posible = ruta_test
+                with open(ruta_test, "rb") as f:
+                    datos_img = f.read()
+                break
 
-            # 2. Si es webp o no existe, descargar directamente en JPG desde YouTube
-            if thumb_url and (not datos_img or posible.endswith(".webp")):
+        if thumb_url and (not datos_img or posible.endswith(".webp")):
+            try:
                 jpg_url = thumb_url.replace("vi_webp/", "vi/").replace(".webp", ".jpg")
-                req = urllib.request.urlopen(jpg_url, timeout=10)
-                datos_img = req.read()
+                req = urllib.request.Request(jpg_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    datos_img = resp.read()
                 ruta_jpg = os.path.join(carpeta_caratulas, base_nombre + ".jpg")
                 with open(ruta_jpg, "wb") as f:
                     f.write(datos_img)
+            except Exception:
+                pass
 
-            if not datos_img:
-                return
+        if not datos_img:
+            return
 
-            # 3. Incrustar en M4A/MP4 o MP3
+        try:
+            from mutagen.mp4 import MP4, MP4Cover
+            from mutagen.id3 import ID3, APIC
+
             if ruta_audio.lower().endswith((".m4a", ".mp4")):
                 audio = MP4(ruta_audio)
                 fmt = MP4Cover.FORMAT_PNG if datos_img[:8] == b"\x89PNG\r\n\x1a\n" else MP4Cover.FORMAT_JPEG
@@ -608,6 +638,7 @@ def main(page: ft.Page):
                 tags.save()
         except Exception:
             pass
+
 
 
     def descargar_playlist(url, max_hilos):
@@ -934,6 +965,8 @@ def main(page: ft.Page):
                 "quiet": True,
                 "no_warnings": True,
                 "ignoreerrors": True,
+                "nocheckcertificate": True,
+                "source_address": "0.0.0.0",
                 "socket_timeout": 10,
             }
             resultados = []
@@ -941,13 +974,29 @@ def main(page: ft.Page):
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(f"ytsearch15:{query}", download=False)
                     resultados = [r for r in (info.get("entries") or []) if r] if info else []
-            except Exception as err:
-                status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
-                page.update()
-                return
+            except Exception:
+                resultados = []
 
-            yt_watch_base = "https://youtube.com"
-            yt_img_base = "https://ytimg.com"
+            if not resultados:
+                try:
+                    import re
+                    yt_search_url = "https://" + "://youtube.com" + urllib.parse.quote(query)
+                    req = urllib.request.Request(yt_search_url, headers={"User-Agent": "Mozilla/5.0"})
+                    html = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", errors="ignore")
+                    ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)))[:15]
+                    titulos = re.findall(r'"title":\{"runs":\[\{"text":"([^"]+)"\}\]', html)
+                    for idx_r, vid in enumerate(ids):
+                        resultados.append({
+                            "id": vid,
+                            "title": titulos[idx_r] if idx_r < len(titulos) else f"Vídeo {vid}",
+                        })
+                except Exception as err:
+                    status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
+                    page.update()
+                    return
+
+            yt_watch_base = "https://" + "www.youtube.com/watch?v="
+            yt_img_base = "https://" + "i.ytimg.com/vi/"
 
             lista_resultados_yt.controls.clear()
             for item in resultados:
@@ -1016,6 +1065,7 @@ def main(page: ft.Page):
             page.update()
 
         page.run_thread(tarea_busqueda)
+
 
 
 
