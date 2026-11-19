@@ -4,11 +4,12 @@ version = "1.0.0"
 description = "Descargador y reproductor local"
 requires-python = ">=3.10"
 dependencies = [
-    "flet",
+    "flet>=1.1.0",
     "flet-audio",
     "flet-permission-handler",
+    "flet-notifications",
     "yt-dlp",
-    "nest-asyncio"
+    "nest-asyncio",
 ]
 
 # Permisos necesarios para Android (Internet, Almacenamiento, Audio y Notificaciones)
