@@ -34,18 +34,37 @@ def main(page: ft.Page):
     page.services.append(notificaciones) if hasattr(page, "services") else page.overlay.append(notificaciones)
 
     async def actualizar_notificacion_bloqueo():
+        if not TIENE_NOTIFICACIONES or notificaciones is None:
+            return
         if indice_actual < 0 or indice_actual >= len(canciones_locales):
             return
-        titulo = os.path.splitext(canciones_locales[indice_actual])[0]
-        texto_boton = "Pausar" if esta_reproduciendo else "Reproducir"
+
+        titulo = os.path.splitext(canciones_locales[indice_actual])
+        texto_play = "⏸ Pausar" if esta_reproduciendo else "▶ Reproducir"
+
         await notificaciones.show(
             id=1001,
             title=titulo,
             body="Reproduciendo" if esta_reproduciendo else "En pausa",
             actions=[
-                ftn.NotificationAction(id="prev", title="Anterior", cancel_notification=False),
-                ftn.NotificationAction(id="play_pause", title=texto_boton, cancel_notification=False),
-                ftn.NotificationAction(id="next", title="Siguiente", cancel_notification=False),
+                ftn.NotificationAction(
+                    id="prev",
+                    title="⏮ Anterior",
+                    shows_user_interface=False,
+                    cancel_notification=False,
+                ),
+                ftn.NotificationAction(
+                    id="play_pause",
+                    title=texto_play,
+                    shows_user_interface=False,
+                    cancel_notification=False,
+                ),
+                ftn.NotificationAction(
+                    id="next",
+                    title="⏭ Siguiente",
+                    shows_user_interface=False,
+                    cancel_notification=False,
+                ),
             ],
             options=ftn.NotificationOptions(
                 android=ftn.AndroidOptions(
@@ -53,9 +72,11 @@ def main(page: ft.Page):
                     silent=True,
                     only_alert_once=True,
                     visibility=ftn.AndroidVisibility.PUBLIC,
+                    category=ftn.AndroidNotificationCategory.TRANSPORT,
                 )
             ),
         )
+
     
     
     
