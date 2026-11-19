@@ -101,44 +101,51 @@ def main(page: ft.Page):
                     except Exception:
                         large_icon = None
 
-            await notificaciones.show(
-                id=1001,
-                title=titulo,
-                body="Reproduciendo" if esta_reproduciendo else "En pausa",
-                actions=[
-                    ftn.NotificationAction(
-                        id="prev",
-                        title="⏮",
-                        cancel_notification=False,
-                        foreground=False,
-                        require_authentication=False,
+            try:
+                await asyncio.wait_for(
+                    notificaciones.show(
+                        id=1001,
+                        title=titulo,
+                        body="Reproduciendo" if esta_reproduciendo else "En pausa",
+                        actions=[
+                            ftn.NotificationAction(
+                                id="prev",
+                                title="⏮",
+                                cancel_notification=False,
+                                foreground=False,
+                                require_authentication=False,
+                            ),
+                            ftn.NotificationAction(
+                                id="play_pause",
+                                title=texto_boton,
+                                cancel_notification=False,
+                                foreground=False,
+                                require_authentication=False,
+                            ),
+                            ftn.NotificationAction(
+                                id="next",
+                                title="⏭",
+                                cancel_notification=False,
+                                foreground=False,
+                                require_authentication=False,
+                            ),
+                        ],
+                        options=ftn.NotificationOptions(
+                            android=ftn.AndroidOptions(
+                                ongoing=True,
+                                silent=True,
+                                only_alert_once=True,
+                                large_icon=large_icon,
+                                category=ftn.AndroidCategory.TRANSPORT,
+                                visibility=ftn.AndroidVisibility.PUBLIC,
+                            )
+                        ),
                     ),
-                    ftn.NotificationAction(
-                        id="play_pause",
-                        title=texto_boton,
-                        cancel_notification=False,
-                        foreground=False,
-                        require_authentication=False,
-                    ),
-                    ftn.NotificationAction(
-                        id="next",
-                        title="⏭",
-                        cancel_notification=False,
-                        foreground=False,
-                        require_authentication=False,
-                    ),
-                ],
-                options=ftn.NotificationOptions(
-                    android=ftn.AndroidOptions(
-                        ongoing=True,
-                        silent=True,
-                        only_alert_once=True,
-                        large_icon=large_icon,
-                        category=ftn.AndroidCategory.TRANSPORT,
-                        visibility=ftn.AndroidVisibility.PUBLIC,
-                    )
-                ),
-            )
+                    timeout=2.0,
+                )
+            except Exception:
+                pass
+
 
 
 
@@ -230,6 +237,8 @@ def main(page: ft.Page):
             lbl_tiempo.value = f"{formatear_tiempo(slider_progreso.value)} / {formatear_tiempo(dur_ms)}"
             page.update()
 
+    cambiando_pista = False
+
     async def on_state_changed(e: fta.AudioStateChangeEvent):
         nonlocal esta_reproduciendo
         if e.state == fta.AudioState.COMPLETED:
@@ -238,23 +247,35 @@ def main(page: ft.Page):
             esta_reproduciendo = True
             btn_play_pause.icon = ft.Icons.PAUSE
             page.update()
-            await actualizar_notificacion_bloqueo()
+            page.run_task(actualizar_notificacion_bloqueo)
         elif e.state in (fta.AudioState.PAUSED, fta.AudioState.STOPPED):
+            if cambiando_pista:
+                return
             esta_reproduciendo = False
             btn_play_pause.icon = ft.Icons.PLAY_ARROW
             page.update()
-            await actualizar_notificacion_bloqueo()
+            page.run_task(actualizar_notificacion_bloqueo)
+
     
 
     audio_player = fta.Audio(
         autoplay=False,
         release_mode=fta.ReleaseMode.STOP,
-        context=fta.AudioContext(focus=fta.AudioFocus.GAIN),
+        context=fta.AudioContext(
+            focus=fta.AudioFocus.GAIN,
+            android=fta.AndroidAudioContext(
+                content_type=fta.AndroidAudioContentType.MUSIC,
+                usage=fta.AndroidAudioUsage.MEDIA,
+                stay_awake=True,
+                audio_focus=fta.AndroidAudioFocus.GAIN,
+            ),
+        ),
         on_position_change=on_position_changed,
         on_duration_change=on_duration_changed,
         on_state_change=on_state_changed,
     )
     page.services.append(audio_player) if hasattr(page, "services") else page.overlay.append(audio_player)
+
 
 #     async def reproducir_indice(idx):
 #         nonlocal indice_actual
@@ -277,31 +298,34 @@ def main(page: ft.Page):
 #         actualizar_lista_ui()
 
     async def reproducir_indice(idx):
-        nonlocal indice_actual
+        nonlocal indice_actual, cambiando_pista
         if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
             return
         if contenedor_video_mini.visible:
             await cerrar_reproductor_video()
 
-        anterior_idx = indice_actual
-        indice_actual = idx
-        nombre = canciones_locales[indice_actual]
-        lbl_cancion_actual.value = os.path.splitext(nombre)[0]
-        slider_progreso.value = 0
-        slider_progreso.max = 100
+        cambiando_pista = True
+        try:
+            anterior_idx = indice_actual
+            indice_actual = idx
+            nombre = canciones_locales[indice_actual]
+            lbl_cancion_actual.value = os.path.splitext(nombre)
+            slider_progreso.value = 0
+            slider_progreso.max = 100
 
-        for pos in (anterior_idx, indice_actual):
-            if 0 <= pos < len(lista_canciones_ui.controls):
-                tile = lista_canciones_ui.controls[pos]
-                if isinstance(tile.title, ft.Text):
-                    tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
+            for pos in (anterior_idx, indice_actual):
+                if 0 <= pos < len(lista_canciones_ui.controls):
+                    tile = lista_canciones_ui.controls[pos]
+                    if isinstance(tile.title, ft.Text):
+                        tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
 
-        if esta_reproduciendo:
-            await audio_player.pause()
-        audio_player.src = os.path.join(ruta_actual, nombre)
-        page.update()
-        await audio_player.play()
-        # page.run_task(actualizar_notificacion_bloqueo)
+            audio_player.src = os.path.join(ruta_actual, nombre)
+            page.update()
+            await audio_player.play()
+        finally:
+            await asyncio.sleep(0.15)
+            cambiando_pista = False
+
 
 
 
@@ -1085,8 +1109,11 @@ def main(page: ft.Page):
                 page.update()
                 return
 
-            yt_watch_base = "https://youtube.com" + "/watch?v="
-            yt_img_base = "https://ytimg.com" + "/vi/"
+            # yt_watch_base = "https://youtube.com" + "/watch?v="
+            # yt_img_base = "https://ytimg.com" + "/vi/"
+            yt_watch_base = "https://youtube.com"
+            yt_img_base = "https://ytimg.com"
+
 
             lista_resultados_yt.controls.clear()
             for item in resultados:
@@ -1221,6 +1248,7 @@ def main(page: ft.Page):
             await permisos.request(fph.Permission.MANAGE_EXTERNAL_STORAGE)
             await permisos.request(fph.Permission.AUDIO)
             await permisos.request(fph.Permission.STORAGE)
+            await permisos.request(fph.Permission.IGNORE_BATTERY_OPTIMIZATIONS)
             await notificaciones.request_permissions()
         except Exception:
             pass
