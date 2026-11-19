@@ -528,7 +528,9 @@ def main(page: ft.Page):
         try:
             await permisos.request(fph.Permission.AUDIO)
             await permisos.request(fph.Permission.STORAGE)
-            await notificaciones.request_permissions()
+            await permisos.request(fph.Permission.MANAGE_EXTERNAL_STORAGE)
+            if notificaciones is not None:
+                await notificaciones.request_permissions()
         except Exception:
             pass
         carpeta_music = os.path.join(raiz_storage, "Music")
