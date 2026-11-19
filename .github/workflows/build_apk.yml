@@ -23,11 +23,13 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Instalar Flet
-        run: pip install --upgrade flet
+      - name: Instalar Flet y dependencias
+        run: |
+          pip install --upgrade pip
+          pip install --upgrade flet flet-audio flet-permission-handler flet-notifications yt-dlp
         
       - name: Compilar APK
-        run: flet build apk --yes
+        run: flet build apk --yes --verbose
 
       - name: Subir APK generado
         uses: actions/upload-artifact@v4
