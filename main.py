@@ -263,18 +263,16 @@ def main(page: ft.Page):
         release_mode=fta.ReleaseMode.STOP,
         context=fta.AudioContext(
             focus=fta.AudioFocus.GAIN,
-            android=fta.AndroidAudioContext(
-                content_type=fta.AndroidAudioContentType.MUSIC,
-                usage=fta.AndroidAudioUsage.MEDIA,
-                stay_awake=True,
-                audio_focus=fta.AndroidAudioFocus.GAIN,
-            ),
+            content_type=fta.AudioContentType.MUSIC,
+            usage=fta.AudioUsage.MEDIA,
+            stay_awake=True,
         ),
         on_position_change=on_position_changed,
         on_duration_change=on_duration_changed,
         on_state_change=on_state_changed,
     )
     page.services.append(audio_player) if hasattr(page, "services") else page.overlay.append(audio_player)
+
 
 
 #     async def reproducir_indice(idx):
@@ -1111,8 +1109,11 @@ def main(page: ft.Page):
 
             # yt_watch_base = "https://youtube.com" + "/watch?v="
             # yt_img_base = "https://ytimg.com" + "/vi/"
-            yt_watch_base = "https://youtube.com"
-            yt_img_base = "https://ytimg.com"
+            # yt_watch_base = "https://youtube.com"
+            # yt_img_base = "https://ytimg.com"
+            yt_watch_base = "https://www." + "://youtube.com"
+            yt_img_base = "https://i." + "://ytimg.com"
+
 
 
             lista_resultados_yt.controls.clear()
