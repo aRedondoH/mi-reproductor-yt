@@ -6,12 +6,14 @@ requires-python = ">=3.10"
 dependencies = [
     "flet>=1.1.0",
     "flet-audio",
+    "flet-video",
     "flet-permission-handler",
     "flet-notifications",
     "yt-dlp",
     "nest-asyncio",
     "mutagen",
 ]
+
 
 
 # Permisos necesarios para Android (Internet, Almacenamiento, Audio y Notificaciones)
@@ -25,5 +27,7 @@ dependencies = [
 "android.permission.READ_EXTERNAL_STORAGE" = true
 "android.permission.WRITE_EXTERNAL_STORAGE" = true
 "android.permission.MANAGE_EXTERNAL_STORAGE" = true
+"android.permission.VIBRATE" = true
+"android.permission.RECEIVE_BOOT_COMPLETED" = true
 
 
