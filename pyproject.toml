@@ -10,7 +10,9 @@ dependencies = [
     "flet-notifications",
     "yt-dlp",
     "nest-asyncio",
+    "mutagen",
 ]
+
 
 # Permisos necesarios para Android (Internet, Almacenamiento, Audio y Notificaciones)
 [tool.flet.android.permission]
