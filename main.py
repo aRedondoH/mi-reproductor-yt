@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Thu Nov 19 17:23:41 2026
+
+@author: Arh
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Wed Nov 18 09:25:24 2026
 
 @author: Arh
@@ -13,6 +20,13 @@ import flet_audio as fta
 import flet_permission_handler as fph
 import flet_notifications as ftn  # <-- AÑADIR ARRIBA (requiere: pip install flet-notifications)
 import asyncio
+import urllib.request
+
+try:
+    import flet_video as ftv
+except ImportError:
+    ftv = None
+
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -46,7 +60,14 @@ def main(page: ft.Page):
             ruta_caratula = obtener_caratula(nombre_archivo)
 
         texto_boton = "⏸ Pausar" if esta_reproduciendo else "▶ Reproducir"
-        large_icon = ftn.AndroidFileBitmap(ruta_caratula) if ruta_caratula and os.path.isfile(ruta_caratula) else None
+        # large_icon = ftn.AndroidFileBitmap(ruta_caratula) if ruta_caratula and os.path.isfile(ruta_caratula) else None
+        large_icon = None
+        if ruta_caratula and os.path.isfile(ruta_caratula):
+            try:
+                with open(ruta_caratula, "rb") as f:
+                    large_icon = ftn.AndroidBytesBitmap(data=f.read())
+            except Exception:
+                large_icon = None
 
         await notificaciones.show(
             id=1001,
@@ -226,6 +247,7 @@ def main(page: ft.Page):
         nonlocal indice_actual
         if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
             return
+        await cerrar_reproductor_video()
         indice_actual = idx
         nombre = canciones_locales[indice_actual]
         lbl_cancion_actual.value = os.path.splitext(nombre)[0]
@@ -281,6 +303,54 @@ def main(page: ft.Page):
     # slider_progreso.on_change_end = on_slider_end
     slider_progreso.on_change_end = lambda e: page.run_task(on_slider_end, e)
 
+    caratulas_buscadas = set()
+    descargando_caratulas = False
+
+    def descargar_caratulas_faltantes():
+        nonlocal descargando_caratulas
+        if descargando_caratulas:
+            return
+        descargando_caratulas = True
+        try:
+            carpeta_actual_snap = ruta_actual
+            carpeta_caratulas = os.path.join(carpeta_actual_snap, ".caratulas")
+            pendientes = [
+                f for f in list(canciones_locales)
+                if (carpeta_actual_snap, f) not in caratulas_buscadas and obtener_caratula(f) is None
+            ]
+            if not pendientes:
+                return
+
+            opts = {"extract_flat": True, "quiet": True, "ignoreerrors": True}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                for archivo in pendientes:
+                    if ruta_actual != carpeta_actual_snap:
+                        break
+                    caratulas_buscadas.add((carpeta_actual_snap, archivo))
+                    base_nombre = os.path.splitext(archivo)[0]
+                    try:
+                        info = ydl.extract_info(f"ytsearch1:{base_nombre}", download=False)
+                        entries = info.get("entries") if info else None
+                        if not entries:
+                            continue
+                        primer_res = entries[0]
+                        vid_id = primer_res.get("id")
+                        thumb_url = primer_res.get("thumbnail") or (
+                            f"https://ytimg.com{vid_id}/hqdefault.jpg" if vid_id else None
+                        )
+
+                        if not thumb_url:
+                            continue
+
+                        ruta_audio = os.path.join(carpeta_actual_snap, archivo)
+                        incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre)
+                        if obtener_caratula(archivo):
+                            actualizar_lista_ui()
+                    except Exception:
+                        continue
+        finally:
+            descargando_caratulas = False
+
     def escanear_canciones(e=None):
         nonlocal canciones_locales
         exts = (".m4a", ".mp3", ".webm", ".opus", ".ogg", ".wav", ".flac", ".aac")
@@ -300,6 +370,8 @@ def main(page: ft.Page):
             page.update()
             return
         actualizar_lista_ui()
+        threading.Thread(target=descargar_caratulas_faltantes, daemon=True).start()
+
 
 
 
@@ -677,36 +749,96 @@ def main(page: ft.Page):
     status_busqueda = ft.Text("Escribe algo para buscar", size=12, color=ft.Colors.GREY_400)
     lista_resultados_yt = ft.ListView(expand=True, spacing=6)
 
-    async def reproducir_stream_youtube(video_url, titulo):
+    video_player = ftv.Video(
+        playlist=[],
+        aspect_ratio=16 / 9,
+        autoplay=True,
+        expand=True,
+        fill_color=ft.Colors.BLACK,
+    ) if ftv else None
+
+    lbl_video_mini = ft.Text("", size=12, weight=ft.FontWeight.BOLD, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True)
+
+    async def cerrar_reproductor_video(e=None):
+        if video_player:
+            try:
+                await video_player.pause()
+                video_player.playlist = []
+            except Exception:
+                pass
+        contenedor_video_mini.visible = False
+        page.update()
+
+    contenedor_video_mini = ft.Container(
+        visible=False,
+        bgcolor=ft.Colors.BLACK,
+        border_radius=8,
+        padding=6,
+        border=ft.Border.all(1, ft.Colors.GREY_800),
+        content=ft.Column([
+            ft.Row([
+                lbl_video_mini,
+                ft.IconButton(
+                    icon=ft.Icons.CLOSE,
+                    icon_size=18,
+                    tooltip="Cerrar vídeo",
+                    on_click=lambda e: page.run_task(cerrar_reproductor_video, e),
+                ),
+            ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Container(
+                height=180,
+                border_radius=6,
+                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                content=video_player if video_player else ft.Text(
+                    "Instala 'flet-video' para ver el vídeo aquí.",
+                    size=12,
+                    color=ft.Colors.GREY_400,
+                ),
+            ),
+        ], spacing=4),
+    )
+
+    async def reproducir_video_youtube(video_url, titulo):
         nonlocal indice_actual
-        indice_actual = -1  # Indica que es streaming y no archivo local
-        lbl_cancion_actual.value = f"Cargando: {titulo}..."
+        indice_actual = -1
+        lbl_cancion_actual.value = f"Cargando vídeo: {titulo}..."
+        lbl_video_mini.value = titulo
         slider_progreso.value = 0
         slider_progreso.max = 100
+        await audio_player.pause()
         page.update()
 
         def extraer_stream():
-            opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'quiet': True, 'no_warnings': True}
+            fmt = "best[ext=mp4]/best" if video_player else "bestaudio[ext=m4a]/bestaudio"
+            opts = {"format": fmt, "quiet": True, "no_warnings": True}
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(video_url, download=False)
-                return info.get('url'), info.get('title', titulo)
+                return info.get("url"), info.get("title", titulo)
 
         try:
             loop = asyncio.get_running_loop()
             stream_url, titulo_real = await loop.run_in_executor(None, extraer_stream)
             if not stream_url:
-                status_busqueda.value = "No se pudo obtener el audio."
+                status_busqueda.value = "No se pudo obtener el vídeo."
                 page.update()
                 return
 
-            await audio_player.pause()
-            audio_player.src = stream_url
             lbl_cancion_actual.value = titulo_real
-            page.update()
-            await audio_player.play()
+            lbl_video_mini.value = titulo_real
+
+            if video_player:
+                contenedor_video_mini.visible = True
+                video_player.playlist = [ftv.VideoMedia(resource=stream_url)]
+                page.update()
+                await video_player.play()
+            else:
+                audio_player.src = stream_url
+                page.update()
+                await audio_player.play()
+
             await actualizar_notificacion_bloqueo(titulo_custom=titulo_real)
         except Exception as err:
-            lbl_cancion_actual.value = "Error al reproducir stream"
+            lbl_cancion_actual.value = "Error al reproducir vídeo"
             status_busqueda.value = f"Error: {str(err)[:50]}"
             page.update()
 
@@ -738,13 +870,14 @@ def main(page: ft.Page):
                 dur_str = f"{int(duracion // 60):02d}:{int(duracion % 60):02d}" if duracion else ""
                 v_url = item.get('url') or f"https://youtube.com{item.get('id')}"
 
+
                 lista_resultados_yt.controls.append(
                     ft.ListTile(
                         dense=True,
                         leading=ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
                         title=ft.Text(titulo, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                         subtitle=ft.Text(f"{canal} • {dur_str}".strip(" •"), size=11, color=ft.Colors.GREY_400),
-                        on_click=lambda _, u=v_url, t=titulo: page.run_task(reproducir_stream_youtube, u, t),
+                        on_click=lambda _, u=v_url, t=titulo: page.run_task(reproducir_video_youtube, u, t),
                         trailing=ft.IconButton(
                             icon=ft.Icons.DOWNLOAD,
                             tooltip="Descargar audio",
@@ -767,11 +900,13 @@ def main(page: ft.Page):
                 busqueda_input,
                 ft.IconButton(icon=ft.Icons.SEARCH, on_click=buscar_youtube_click),
             ]),
+            contenedor_video_mini,
             status_busqueda,
             ft.Divider(height=1),
             lista_resultados_yt,
         ], expand=True, spacing=8)
     )
+
 
 
     tabs = ft.Tabs(
