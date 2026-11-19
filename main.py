@@ -20,6 +20,7 @@ import flet_audio as fta
 import flet_permission_handler as fph
 import flet_notifications as ftn  # <-- AÑADIR ARRIBA (requiere: pip install flet-notifications)
 import asyncio
+import urllib.parse
 import urllib.request
 
 try:
@@ -248,17 +249,25 @@ def main(page: ft.Page):
         if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
             return
         await cerrar_reproductor_video()
+        anterior_idx = indice_actual
         indice_actual = idx
         nombre = canciones_locales[indice_actual]
         lbl_cancion_actual.value = os.path.splitext(nombre)[0]
         slider_progreso.value = 0
         slider_progreso.max = 100
+
+        for pos in (anterior_idx, indice_actual):
+            if 0 <= pos < len(lista_canciones_ui.controls):
+                tile = lista_canciones_ui.controls[pos]
+                if isinstance(tile.title, ft.Text):
+                    tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
+
         await audio_player.pause()
         audio_player.src = os.path.join(ruta_actual, nombre)
         page.update()
         await audio_player.play()
-        actualizar_lista_ui()
         await actualizar_notificacion_bloqueo()
+
 
 
     async def toggle_play_pause(e):
@@ -385,6 +394,8 @@ def main(page: ft.Page):
         if descargando_caratulas:
             return
         descargando_caratulas = True
+        btn_caratulas.disabled = True
+        page.update()
         try:
             carpeta_actual_snap = ruta_actual
             carpeta_caratulas = os.path.join(carpeta_actual_snap, ".caratulas")
@@ -408,7 +419,8 @@ def main(page: ft.Page):
             if not pendientes:
                 return
 
-            opts = {"extract_flat": True, "quiet": True, "ignoreerrors": True}
+            opts = {"extract_flat": "in_playlist", "quiet": True, "ignoreerrors": True}
+            yt_img_base = "https://" + "i.ytimg.com/vi/"
             with yt_dlp.YoutubeDL(opts) as ydl:
                 for idx_p, archivo in enumerate(pendientes):
                     if ruta_actual != carpeta_actual_snap:
@@ -417,17 +429,14 @@ def main(page: ft.Page):
                     base_nombre = os.path.splitext(archivo)[0]
                     try:
                         info = ydl.extract_info(f"ytsearch1:{base_nombre}", download=False)
-                        entries = info.get("entries") if info else None
+                        entries = [e for e in (info.get("entries") or []) if e] if info else []
                         if not entries:
                             continue
                         primer_res = entries[0]
                         vid_id = primer_res.get("id")
-                        yt_img_base = "https://" + "ytimg.com" + "/vi/"
                         thumb_url = primer_res.get("thumbnail") or (
                             f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None
                         )
-
-
                         if not thumb_url:
                             continue
 
@@ -445,6 +454,14 @@ def main(page: ft.Page):
                 actualizar_lista_ui()
         finally:
             descargando_caratulas = False
+            btn_caratulas.disabled = False
+            page.update()
+
+    def iniciar_descarga_caratulas(e=None):
+        claves_carpeta = [k for k in caratulas_buscadas if k[0] == ruta_actual]
+        for k in claves_carpeta:
+            caratulas_buscadas.discard(k)
+        threading.Thread(target=descargar_caratulas_faltantes, daemon=True).start()
 
     def escanear_canciones(e=None):
         nonlocal canciones_locales
@@ -465,7 +482,7 @@ def main(page: ft.Page):
             page.update()
             return
         actualizar_lista_ui()
-        threading.Thread(target=descargar_caratulas_faltantes, daemon=True).start()
+
 
     
     def actualizar_lista_ui():
@@ -738,14 +755,15 @@ def main(page: ft.Page):
     btn_descargar = ft.Button("Descargar Todo", icon=ft.Icons.DOWNLOAD, on_click=iniciar_click)
 
     # escanear_canciones()  # <-- AÑADIR ANTES DE page.add
+    btn_caratulas = ft.Button("Carátulas", icon=ft.Icons.IMAGE_SEARCH, on_click=iniciar_descarga_caratulas)
+
     vista_biblioteca = ft.Container(
         padding=ft.Padding.symmetric(horizontal=12, vertical=8),
         expand=True,
         content=ft.Column([
             ft.Row([
                 ft.Button("Elegir carpeta", icon=ft.Icons.FOLDER_OPEN, on_click=lambda _: page.run_task(abrir_selector_carpeta)),
-                ft.IconButton(icon=ft.Icons.MUSIC_NOTE, tooltip="Music", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Music"))),
-                ft.IconButton(icon=ft.Icons.DOWNLOAD, tooltip="Download", on_click=lambda _: establecer_carpeta(os.path.join(raiz_storage, "Download"))),
+                btn_caratulas,
                 ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Actualizar", on_click=escanear_canciones),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Row([ft.Icon(ft.Icons.FOLDER, size=14, color=ft.Colors.GREY_400), lbl_ruta_actual]),
@@ -753,6 +771,7 @@ def main(page: ft.Page):
             lista_canciones_ui
         ], expand=True, spacing=8)
     )
+
 
     vista_descargador = ft.Container(
         padding=ft.Padding.symmetric(horizontal=12, vertical=8),
@@ -901,46 +920,51 @@ def main(page: ft.Page):
         page.update()
 
         def tarea_busqueda():
-            opts = {'extract_flat': True, 'quiet': True, 'ignoreerrors': True}
+            opts = {
+                "extract_flat": "in_playlist",
+                "quiet": True,
+                "no_warnings": True,
+                "ignoreerrors": False,
+                "playlistend": 15,
+                "extractor_args": {"youtube": {"player_client": ["web", "android"]}},
+            }
             resultados = []
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(f"ytsearch15:{query}", download=False)
-                    resultados = [r for r in info.get('entries', []) if r]
+                    resultados = [r for r in (info.get("entries") or []) if r] if info else []
+                    if not resultados:
+                        dominio_yt = "www." + "youtube" + ".com"
+                        ruta_busqueda = "/results" + "?search_query="
+                        search_url = f"https://{dominio_yt}{ruta_busqueda}{urllib.parse.quote(query)}"
+
+                        # search_url = "https://" + "://youtube.com" + urllib.parse.quote(query)
+                        info = ydl.extract_info(search_url, download=False)
+                        resultados = [r for r in (info.get("entries") or []) if r and r.get("id")] if info else []
             except Exception as err:
-                status_busqueda.value = f"Error de búsqueda: {str(err)[:40]}"
+                status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
                 page.update()
                 return
 
+            yt_watch_base = "https://" + "www.youtube.com/watch?v="
+            yt_img_base = "https://" + "i.ytimg.com/vi/"
+
             lista_resultados_yt.controls.clear()
             for item in resultados:
-                titulo = item.get('title', 'Sin título')
-                canal = item.get('uploader', '')
-                duracion = item.get('duration')
+                titulo = item.get("title", "Sin título")
+                canal = item.get("uploader") or item.get("channel") or ""
+                duracion = item.get("duration")
                 dur_str = f"{int(duracion // 60):02d}:{int(duracion % 60):02d}" if duracion else ""
-                vid_id = item.get('id')
-                
-                # v_url = item.get('url') or f"https://youtube.com{vid_id}"
+                vid_id = item.get("id")
+                raw_url = item.get("url") or ""
+                v_url = raw_url if raw_url.startswith("http") else f"{yt_watch_base}{vid_id}"
 
-                # thumbs = item.get('thumbnails') or []
-                # thumb_url = (
-                #     item.get('thumbnail')
-                #     or (thumbs[-1].get('url') if thumbs else None)
-                #     or (f"https://ytimg.com{vid_id}/hqdefault.jpg" if vid_id else None)
-                # )
-                yt_watch_base = "https://" + "youtube.com" + "/watch?v="
-                yt_img_base = "https://" + "ytimg.com" + "/vi/"
-
-                v_url = item.get('url') or f"{yt_watch_base}{vid_id}"
-
-                thumbs = item.get('thumbnails') or []
+                thumbs = item.get("thumbnails") or []
                 thumb_url = (
-                    item.get('thumbnail')
-                    or (thumbs[-1].get('url') if thumbs else None)
+                    item.get("thumbnail")
+                    or (thumbs[-1].get("url") if thumbs else None)
                     or (f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None)
                 )
-
-
 
                 if thumb_url:
                     portada = ft.Container(
@@ -994,6 +1018,7 @@ def main(page: ft.Page):
             page.update()
 
         threading.Thread(target=tarea_busqueda, daemon=True).start()
+
 
 
     vista_buscador = ft.Container(
