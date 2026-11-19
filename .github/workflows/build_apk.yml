@@ -28,14 +28,11 @@ jobs:
           pip install --upgrade pip
           pip install --upgrade flet flet-audio flet-permission-handler flet-notifications yt-dlp
 
-      - name: Limpiar cachés de descarga
-        run: rm -rf ~/.flet/cache
-
       - name: Compilar APK
         timeout-minutes: 45
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
-        run: flet build apk --arch arm64-v8a --yes -- --target-platform android-arm64
+        run: flet build apk --arch arm64-v8a --yes
 
       - name: Subir APK generado
         uses: actions/upload-artifact@v4
