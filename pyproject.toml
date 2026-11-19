@@ -11,11 +11,14 @@ dependencies = [
     "nest-asyncio"
 ]
 
+# Permisos necesarios para Android (Internet, Almacenamiento, Audio y Notificaciones)
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true
+"android.permission.POST_NOTIFICATIONS" = true
+"android.permission.FOREGROUND_SERVICE" = true
+"android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" = true
+"android.permission.WAKE_LOCK" = true
+"android.permission.READ_MEDIA_AUDIO" = true
 "android.permission.READ_EXTERNAL_STORAGE" = true
 "android.permission.WRITE_EXTERNAL_STORAGE" = true
-"android.permission.READ_MEDIA_AUDIO" = true
-"android.permission.MANAGE_EXTERNAL_STORAGE" = true
-"android.permission.WAKE_LOCK" = true
 
