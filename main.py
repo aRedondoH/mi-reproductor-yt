@@ -12,6 +12,7 @@ import os
 import flet_audio as fta
 import flet_permission_handler as fph
 import flet_notifications as ftn  # <-- AÑADIR ARRIBA (requiere: pip install flet-notifications)
+import asyncio
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -33,11 +34,20 @@ def main(page: ft.Page):
     notificaciones = ftn.Notifications(on_action=manejar_accion_notificacion)
     page.services.append(notificaciones) if hasattr(page, "services") else page.overlay.append(notificaciones)
 
-    async def actualizar_notificacion_bloqueo():
-        if indice_actual < 0 or indice_actual >= len(canciones_locales):
-            return
-        titulo = os.path.splitext(canciones_locales[indice_actual])[0]
-        texto_boton = "Pausar" if esta_reproduciendo else "Reproducir"
+    async def actualizar_notificacion_bloqueo(titulo_custom=None, caratula_custom=None):
+        if titulo_custom:
+            titulo = titulo_custom
+            ruta_caratula = caratula_custom
+        else:
+            if indice_actual < 0 or indice_actual >= len(canciones_locales):
+                return
+            nombre_archivo = canciones_locales[indice_actual]
+            titulo = os.path.splitext(nombre_archivo)[0]
+            ruta_caratula = obtener_caratula(nombre_archivo)
+
+        texto_boton = "⏸ Pausar" if esta_reproduciendo else "▶ Reproducir"
+        large_icon = ftn.AndroidFileBitmap(ruta_caratula) if ruta_caratula and os.path.isfile(ruta_caratula) else None
+
         await notificaciones.show(
             id=1001,
             title=titulo,
@@ -45,7 +55,7 @@ def main(page: ft.Page):
             actions=[
                 ftn.NotificationAction(
                     id="prev",
-                    title="Anterior",
+                    title="⏮ Anterior",
                     cancel_notification=False,
                     foreground=False,
                     require_authentication=False,
@@ -59,7 +69,7 @@ def main(page: ft.Page):
                 ),
                 ftn.NotificationAction(
                     id="next",
-                    title="Siguiente",
+                    title="⏭ Siguiente",
                     cancel_notification=False,
                     foreground=False,
                     require_authentication=False,
@@ -70,10 +80,13 @@ def main(page: ft.Page):
                     ongoing=True,
                     silent=True,
                     only_alert_once=True,
+                    large_icon=large_icon,
+                    category=ftn.AndroidCategory.TRANSPORT,
                     visibility=ftn.AndroidVisibility.PUBLIC,
                 )
             ),
         )
+
 
     
     
@@ -100,6 +113,7 @@ def main(page: ft.Page):
 
     async def abrir_selector_carpeta(e=None):
         try:
+            await permisos.request(fph.Permission.MANAGE_EXTERNAL_STORAGE)
             await permisos.request(fph.Permission.AUDIO)
             await permisos.request(fph.Permission.STORAGE)
         except Exception:
@@ -436,6 +450,47 @@ def main(page: ft.Page):
             log_column.controls.append(ft.Text(mensaje, size=12))
             page.update()
 
+    def incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre):
+        try:
+            import urllib.request
+            from mutagen.mp4 import MP4, MP4Cover
+            from mutagen.id3 import ID3, APIC
+
+            datos_img = None
+            # 1. Buscar si yt-dlp ya descargó una miniatura local
+            for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                posible = os.path.join(carpeta_caratulas, base_nombre + ext)
+                if os.path.isfile(posible):
+                    with open(posible, "rb") as f:
+                        datos_img = f.read()
+                    break
+
+            # 2. Si es webp o no existe, descargar directamente en JPG desde YouTube
+            if thumb_url and (not datos_img or posible.endswith(".webp")):
+                jpg_url = thumb_url.replace("vi_webp/", "vi/").replace(".webp", ".jpg")
+                req = urllib.request.urlopen(jpg_url, timeout=10)
+                datos_img = req.read()
+                ruta_jpg = os.path.join(carpeta_caratulas, base_nombre + ".jpg")
+                with open(ruta_jpg, "wb") as f:
+                    f.write(datos_img)
+
+            if not datos_img:
+                return
+
+            # 3. Incrustar en M4A/MP4 o MP3
+            if ruta_audio.lower().endswith((".m4a", ".mp4")):
+                audio = MP4(ruta_audio)
+                fmt = MP4Cover.FORMAT_PNG if datos_img[:8] == b"\x89PNG\r\n\x1a\n" else MP4Cover.FORMAT_JPEG
+                audio["covr"] = [MP4Cover(datos_img, imageformat=fmt)]
+                audio.save()
+            elif ruta_audio.lower().endswith(".mp3"):
+                tags = ID3(ruta_audio)
+                tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=datos_img))
+                tags.save()
+        except Exception:
+            pass
+
+
     def descargar_playlist(url, max_hilos):
         os.makedirs(ruta_actual, exist_ok=True)
 
@@ -517,6 +572,7 @@ def main(page: ft.Page):
         #         'quiet': True,
         #         'no_warnings': True,
         #     }
+
         def descargar_una(video_url):
             nonlocal completadas
             carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
@@ -533,7 +589,6 @@ def main(page: ft.Page):
                 'no_warnings': True,
             }
 
-
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info_video = ydl.extract_info(video_url, download=True)
@@ -542,6 +597,8 @@ def main(page: ft.Page):
                     ruta_archivo = ydl.prepare_filename(info_video)
                     if not os.path.exists(ruta_archivo):
                         raise Exception("El archivo no se guardó en el dispositivo.")
+                    base_nombre = os.path.splitext(os.path.basename(ruta_archivo))[0]
+                    incrustar_caratula_en_audio(ruta_archivo, info_video.get("thumbnail"), carpeta_caratulas, base_nombre)
                     titulo = info_video.get('title', 'Canción')
                     log(f"✔ {titulo}")
             except Exception as e:
@@ -553,6 +610,7 @@ def main(page: ft.Page):
                     progress_bar.value = completadas / total
                     status_text.value = f"Progreso: {completadas} de {total} completadas"
                     page.update()
+
         
                     
 
@@ -610,9 +668,115 @@ def main(page: ft.Page):
         ], expand=True, spacing=10)
     )
 
+    busqueda_input = ft.TextField(
+        label="Buscar en YouTube",
+        hint_text="Artista, canción o vídeo...",
+        expand=True,
+        on_submit=lambda e: buscar_youtube_click(e),
+    )
+    status_busqueda = ft.Text("Escribe algo para buscar", size=12, color=ft.Colors.GREY_400)
+    lista_resultados_yt = ft.ListView(expand=True, spacing=6)
+
+    async def reproducir_stream_youtube(video_url, titulo):
+        nonlocal indice_actual
+        indice_actual = -1  # Indica que es streaming y no archivo local
+        lbl_cancion_actual.value = f"Cargando: {titulo}..."
+        slider_progreso.value = 0
+        slider_progreso.max = 100
+        page.update()
+
+        def extraer_stream():
+            opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'quiet': True, 'no_warnings': True}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
+                return info.get('url'), info.get('title', titulo)
+
+        try:
+            loop = asyncio.get_running_loop()
+            stream_url, titulo_real = await loop.run_in_executor(None, extraer_stream)
+            if not stream_url:
+                status_busqueda.value = "No se pudo obtener el audio."
+                page.update()
+                return
+
+            await audio_player.pause()
+            audio_player.src = stream_url
+            lbl_cancion_actual.value = titulo_real
+            page.update()
+            await audio_player.play()
+            await actualizar_notificacion_bloqueo(titulo_custom=titulo_real)
+        except Exception as err:
+            lbl_cancion_actual.value = "Error al reproducir stream"
+            status_busqueda.value = f"Error: {str(err)[:50]}"
+            page.update()
+
+    def buscar_youtube_click(e=None):
+        query = busqueda_input.value.strip()
+        if not query:
+            return
+        status_busqueda.value = "Buscando en YouTube..."
+        lista_resultados_yt.controls.clear()
+        page.update()
+
+        def tarea_busqueda():
+            opts = {'extract_flat': True, 'quiet': True, 'ignoreerrors': True}
+            resultados = []
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(f"ytsearch15:{query}", download=False)
+                    resultados = [r for r in info.get('entries', []) if r]
+            except Exception as err:
+                status_busqueda.value = f"Error de búsqueda: {str(err)[:40]}"
+                page.update()
+                return
+
+            lista_resultados_yt.controls.clear()
+            for item in resultados:
+                titulo = item.get('title', 'Sin título')
+                canal = item.get('uploader', '')
+                duracion = item.get('duration')
+                dur_str = f"{int(duracion // 60):02d}:{int(duracion % 60):02d}" if duracion else ""
+                v_url = item.get('url') or f"https://youtube.com{item.get('id')}"
+
+                lista_resultados_yt.controls.append(
+                    ft.ListTile(
+                        dense=True,
+                        leading=ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
+                        title=ft.Text(titulo, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                        subtitle=ft.Text(f"{canal} • {dur_str}".strip(" •"), size=11, color=ft.Colors.GREY_400),
+                        on_click=lambda _, u=v_url, t=titulo: page.run_task(reproducir_stream_youtube, u, t),
+                        trailing=ft.IconButton(
+                            icon=ft.Icons.DOWNLOAD,
+                            tooltip="Descargar audio",
+                            on_click=lambda _, u=v_url: threading.Thread(
+                                target=descargar_playlist, args=(u, 1), daemon=True
+                            ).start(),
+                        ),
+                    )
+                )
+            status_busqueda.value = f"{len(resultados)} resultados encontrados"
+            page.update()
+
+        threading.Thread(target=tarea_busqueda, daemon=True).start()
+
+    vista_buscador = ft.Container(
+        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+        expand=True,
+        content=ft.Column([
+            ft.Row([
+                busqueda_input,
+                ft.IconButton(icon=ft.Icons.SEARCH, on_click=buscar_youtube_click),
+            ]),
+            status_busqueda,
+            ft.Divider(height=1),
+            lista_resultados_yt,
+        ], expand=True, spacing=8)
+    )
+
+
     tabs = ft.Tabs(
         selected_index=0,
-        length=2,
+        length=3,
         expand=True,
         content=ft.Column(
             expand=True,
@@ -620,6 +784,7 @@ def main(page: ft.Page):
                 ft.TabBar(
                     tabs=[
                         ft.Tab(label="Mi Música", icon=ft.Icons.LIBRARY_MUSIC),
+                        ft.Tab(label="Buscar", icon=ft.Icons.SEARCH),
                         ft.Tab(label="Descargar", icon=ft.Icons.CLOUD_DOWNLOAD),
                     ]
                 ),
@@ -627,12 +792,14 @@ def main(page: ft.Page):
                     expand=True,
                     controls=[
                         vista_biblioteca,
+                        vista_buscador,
                         vista_descargador,
                     ],
                 ),
             ],
         ),
     )
+
 
 
     barra_reproductor = ft.Container(
@@ -655,6 +822,7 @@ def main(page: ft.Page):
 
     async def inicializar_app():
         try:
+            await permisos.request(fph.Permission.MANAGE_EXTERNAL_STORAGE)
             await permisos.request(fph.Permission.AUDIO)
             await permisos.request(fph.Permission.STORAGE)
             await notificaciones.request_permissions()
