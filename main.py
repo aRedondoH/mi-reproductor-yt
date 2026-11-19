@@ -11,13 +11,7 @@ import threading
 import os
 import flet_audio as fta
 import flet_permission_handler as fph
-try:
-    import flet_notifications as ftn
-    TIENE_NOTIFICACIONES = True
-except ImportError:
-    ftn = None
-    TIENE_NOTIFICACIONES = False
- 
+import flet_notifications as ftn  # <-- AÑADIR ARRIBA (requiere: pip install flet-notifications)
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -40,14 +34,10 @@ def main(page: ft.Page):
     page.services.append(notificaciones) if hasattr(page, "services") else page.overlay.append(notificaciones)
 
     async def actualizar_notificacion_bloqueo():
-        if not TIENE_NOTIFICACIONES or notificaciones is None:
-            return
         if indice_actual < 0 or indice_actual >= len(canciones_locales):
             return
-
         titulo = os.path.splitext(canciones_locales[indice_actual])[0]
-        texto_play = "⏸ Pausar" if esta_reproduciendo else "▶ Reproducir"
-
+        texto_boton = "Pausar" if esta_reproduciendo else "Reproducir"
         await notificaciones.show(
             id=1001,
             title=titulo,
@@ -55,21 +45,24 @@ def main(page: ft.Page):
             actions=[
                 ftn.NotificationAction(
                     id="prev",
-                    title="⏮ Anterior",
-                    shows_user_interface=False,
+                    title="Anterior",
                     cancel_notification=False,
+                    foreground=False,
+                    require_authentication=False,
                 ),
                 ftn.NotificationAction(
                     id="play_pause",
-                    title=texto_play,
-                    shows_user_interface=False,
+                    title=texto_boton,
                     cancel_notification=False,
+                    foreground=False,
+                    require_authentication=False,
                 ),
                 ftn.NotificationAction(
                     id="next",
-                    title="⏭ Siguiente",
-                    shows_user_interface=False,
+                    title="Siguiente",
                     cancel_notification=False,
+                    foreground=False,
+                    require_authentication=False,
                 ),
             ],
             options=ftn.NotificationOptions(
@@ -78,11 +71,9 @@ def main(page: ft.Page):
                     silent=True,
                     only_alert_once=True,
                     visibility=ftn.AndroidVisibility.PUBLIC,
-                    category=ftn.AndroidNotificationCategory.TRANSPORT,
                 )
             ),
         )
-
 
     
     
@@ -311,18 +302,111 @@ def main(page: ft.Page):
     #         )
     #     page.update()
 
+    # def actualizar_lista_ui():
+    #     lista_canciones_ui.controls.clear()
+    #     for i, archivo in enumerate(canciones_locales):
+    #         es_actual = (i == indice_actual)
+    #         lista_canciones_ui.controls.append(
+    #             ft.ListTile(
+    #                 dense=True,
+    #                 content_padding=ft.Padding.symmetric(horizontal=4, vertical=0),
+    #                 leading=ft.Icon(ft.Icons.GRAPHIC_EQ if es_actual else ft.Icons.MUSIC_NOTE, size=16),
+    #                 title=ft.Text(
+    #                     os.path.splitext(archivo)[0],
+    #                     size=12,
+    #                     max_lines=1,
+    #                     overflow=ft.TextOverflow.ELLIPSIS,
+    #                 ),
+    #                 on_click=lambda e, idx=i: page.run_task(reproducir_indice, idx),
+    #             )
+    #         )
+    #     page.update()
+    def obtener_caratula(nombre_archivo):
+        base = os.path.splitext(nombre_archivo)[0]
+        carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
+
+        # 1. Buscar imagen en .caratulas o en la carpeta actual
+        for carpeta in (carpeta_caratulas, ruta_actual):
+            for ext in (".jpg", ".jpeg", ".png", ".webp"):
+                ruta_img = os.path.join(carpeta, base + ext)
+                if os.path.isfile(ruta_img):
+                    return ruta_img
+
+        # 2. (Opcional) Extraer carátula incrustada si mutagen está instalado
+        try:
+            import mutagen
+            ruta_audio = os.path.join(ruta_actual, nombre_archivo)
+            audio = mutagen.File(ruta_audio)
+            datos_img = None
+            if audio and getattr(audio, "tags", None):
+                for tag in audio.tags.values():
+                    if hasattr(tag, "data"):  # MP3 (APIC)
+                        datos_img = tag.data
+                        break
+                if not datos_img and "covr" in audio.tags:  # M4A / MP4
+                    datos_img = bytes(audio.tags["covr"][0])
+            if datos_img:
+                os.makedirs(carpeta_caratulas, exist_ok=True)
+                ruta_guardada = os.path.join(carpeta_caratulas, base + ".jpg")
+                with open(ruta_guardada, "wb") as f:
+                    f.write(datos_img)
+                return ruta_guardada
+        except Exception:
+            pass
+
+        return None
+
     def actualizar_lista_ui():
         lista_canciones_ui.controls.clear()
         for i, archivo in enumerate(canciones_locales):
             es_actual = (i == indice_actual)
+            ruta_caratula = obtener_caratula(archivo)
+
+            if ruta_caratula:
+                img = ft.Image(
+                    src=ruta_caratula,
+                    width=42,
+                    height=42,
+                    fit=ft.BoxFit.COVER,
+                )
+                miniatura = ft.Container(
+                    width=42,
+                    height=42,
+                    border_radius=6,
+                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                    content=ft.Stack(
+                        [
+                            img,
+                            ft.Container(
+                                bgcolor=ft.Colors.BLACK54,
+                                alignment=ft.Alignment.CENTER,
+                                content=ft.Icon(ft.Icons.GRAPHIC_EQ, size=20, color=ft.Colors.WHITE),
+                            ),
+                        ]
+                    ) if es_actual else img,
+                )
+            else:
+                miniatura = ft.Container(
+                    width=42,
+                    height=42,
+                    border_radius=6,
+                    bgcolor=ft.Colors.GREY_800,
+                    alignment=ft.Alignment.CENTER,
+                    content=ft.Icon(
+                        ft.Icons.GRAPHIC_EQ if es_actual else ft.Icons.MUSIC_NOTE,
+                        size=20,
+                    ),
+                )
+
             lista_canciones_ui.controls.append(
                 ft.ListTile(
                     dense=True,
-                    content_padding=ft.Padding.symmetric(horizontal=4, vertical=0),
-                    leading=ft.Icon(ft.Icons.GRAPHIC_EQ if es_actual else ft.Icons.MUSIC_NOTE, size=16),
+                    content_padding=ft.Padding.symmetric(horizontal=4, vertical=2),
+                    leading=miniatura,
                     title=ft.Text(
                         os.path.splitext(archivo)[0],
                         size=12,
+                        weight=ft.FontWeight.BOLD if es_actual else None,
                         max_lines=1,
                         overflow=ft.TextOverflow.ELLIPSIS,
                     ),
@@ -330,6 +414,7 @@ def main(page: ft.Page):
                 )
             )
         page.update()
+
     
            
     url_input = ft.TextField(
@@ -346,49 +431,10 @@ def main(page: ft.Page):
     # Candado para evitar conflictos visuales entre hilos
     ui_lock = threading.Lock()
 
-    def log(mensaje, ok=True, miniatura=None):
+    def log(mensaje):
         with ui_lock:
-            if miniatura:
-                icono_izq = ft.Image(
-                    src=miniatura,
-                    width=28,
-                    height=28,
-                    fit=ft.BoxFit.COVER,
-                    border_radius=4,
-                    error_content=ft.Icon(ft.Icons.MUSIC_NOTE, size=20, color=ft.Colors.BLUE_300),
-                )
-            else:
-                icono_izq = ft.Icon(
-                    ft.Icons.MUSIC_NOTE if ok else ft.Icons.ERROR_OUTLINE,
-                    size=20,
-                    color=ft.Colors.BLUE_300 if ok else ft.Colors.RED_400,
-                )
-
-            icono_estado = ft.Icon(
-                ft.Icons.CHECK_CIRCLE if ok else ft.Icons.CANCEL,
-                size=16,
-                color=ft.Colors.GREEN_400 if ok else ft.Colors.RED_400,
-            )
-
-            log_column.controls.append(
-                ft.Row(
-                    controls=[
-                        icono_izq,
-                        ft.Text(
-                            mensaje,
-                            size=12,
-                            expand=True,
-                            max_lines=1,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                        ),
-                        icono_estado,
-                    ],
-                    spacing=8,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                )
-            )
+            log_column.controls.append(ft.Text(mensaje, size=12))
             page.update()
-
 
     def descargar_playlist(url, max_hilos):
         os.makedirs(ruta_actual, exist_ok=True)
@@ -461,17 +507,32 @@ def main(page: ft.Page):
         #             status_text.value = f"Progreso: {completadas} de {total} completadas"
                     
         #             page.update()
+        # def descargar_una(video_url):
+        #     nonlocal completadas
+        #     os.makedirs(ruta_actual, exist_ok=True)
+        #     ydl_opts = {
+        #         'format': 'bestaudio[ext=m4a]/bestaudio',
+        #         'outtmpl': f'{ruta_actual}/%(title)s.%(ext)s',
+        #         'ignoreerrors': False,
+        #         'quiet': True,
+        #         'no_warnings': True,
+        #     }
         def descargar_una(video_url):
             nonlocal completadas
-            os.makedirs(ruta_actual, exist_ok=True)
+            carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
+            os.makedirs(carpeta_caratulas, exist_ok=True)
             ydl_opts = {
                 'format': 'bestaudio[ext=m4a]/bestaudio',
-                'outtmpl': os.path.join(ruta_actual, '%(title)s.%(ext)s'),
-                'restrictfilenames': True,
+                'outtmpl': {
+                    'default': f'{ruta_actual}/%(title)s.%(ext)s',
+                    'thumbnail': f'{carpeta_caratulas}/%(title)s.%(ext)s',
+                },
+                'writethumbnail': True,
                 'ignoreerrors': False,
                 'quiet': True,
                 'no_warnings': True,
             }
+
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -482,18 +543,16 @@ def main(page: ft.Page):
                     if not os.path.exists(ruta_archivo):
                         raise Exception("El archivo no se guardó en el dispositivo.")
                     titulo = info_video.get('title', 'Canción')
-                    miniatura = info_video.get('thumbnail')
-                    log(f"{titulo} — OK", ok=True, miniatura=miniatura)
+                    log(f"✔ {titulo}")
             except Exception as e:
                 msg_error = str(e).replace("ERROR: ", "").strip()
-                log(f"Error ({video_url}): {msg_error[:80]}", ok=False)
+                log(f"✖ Error ({video_url}): {msg_error[:80]}")
             finally:
                 with ui_lock:
                     completadas += 1
                     progress_bar.value = completadas / total
                     status_text.value = f"Progreso: {completadas} de {total} completadas"
                     page.update()
-
         
                     
 
@@ -598,9 +657,7 @@ def main(page: ft.Page):
         try:
             await permisos.request(fph.Permission.AUDIO)
             await permisos.request(fph.Permission.STORAGE)
-            await permisos.request(fph.Permission.MANAGE_EXTERNAL_STORAGE)
-            if notificaciones is not None:
-                await notificaciones.request_permissions()
+            await notificaciones.request_permissions()
         except Exception:
             pass
         carpeta_music = os.path.join(raiz_storage, "Music")
