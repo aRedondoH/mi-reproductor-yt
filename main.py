@@ -248,7 +248,9 @@ def main(page: ft.Page):
         nonlocal indice_actual
         if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
             return
-        await cerrar_reproductor_video()
+        if contenedor_video_mini.visible:
+            await cerrar_reproductor_video()
+
         anterior_idx = indice_actual
         indice_actual = idx
         nombre = canciones_locales[indice_actual]
@@ -262,11 +264,13 @@ def main(page: ft.Page):
                 if isinstance(tile.title, ft.Text):
                     tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
 
-        await audio_player.pause()
+        if esta_reproduciendo:
+            await audio_player.pause()
         audio_player.src = os.path.join(ruta_actual, nombre)
         page.update()
         await audio_player.play()
-        await actualizar_notificacion_bloqueo()
+        page.run_task(actualizar_notificacion_bloqueo)
+
 
 
 
@@ -805,14 +809,16 @@ def main(page: ft.Page):
     lbl_video_mini = ft.Text("", size=12, weight=ft.FontWeight.BOLD, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True)
 
     async def cerrar_reproductor_video(e=None):
-        if video_player:
+        if video_player and contenedor_video_mini.visible:
             try:
                 await video_player.pause()
                 video_player.playlist = []
             except Exception:
                 pass
-        contenedor_video_mini.visible = False
-        page.update()
+        if contenedor_video_mini.visible:
+            contenedor_video_mini.visible = False
+            page.update()
+
 
     contenedor_video_mini = ft.Container(
         visible=False,
@@ -851,8 +857,10 @@ def main(page: ft.Page):
         lbl_video_mini.value = titulo
         slider_progreso.value = 0
         slider_progreso.max = 100
-        await audio_player.pause()
+        if esta_reproduciendo:
+            await audio_player.pause()
         page.update()
+
 
         def extraer_stream():
             fmt = (
@@ -894,7 +902,8 @@ def main(page: ft.Page):
             lbl_video_mini.value = titulo_real
 
             if video_player:
-                await video_player.pause()
+                if contenedor_video_mini.visible:
+                    await video_player.pause()
                 contenedor_video_mini.visible = True
                 video_player.playlist = [ftv.VideoMedia(resource=stream_url, http_headers=headers)]
                 page.update()
@@ -921,33 +930,24 @@ def main(page: ft.Page):
 
         def tarea_busqueda():
             opts = {
-                "extract_flat": "in_playlist",
+                "extract_flat": True,
                 "quiet": True,
                 "no_warnings": True,
-                "ignoreerrors": False,
-                "playlistend": 15,
-                "extractor_args": {"youtube": {"player_client": ["web", "android"]}},
+                "ignoreerrors": True,
+                "socket_timeout": 10,
             }
             resultados = []
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(f"ytsearch15:{query}", download=False)
                     resultados = [r for r in (info.get("entries") or []) if r] if info else []
-                    if not resultados:
-                        dominio_yt = "www." + "youtube" + ".com"
-                        ruta_busqueda = "/results" + "?search_query="
-                        search_url = f"https://{dominio_yt}{ruta_busqueda}{urllib.parse.quote(query)}"
-
-                        # search_url = "https://" + "://youtube.com" + urllib.parse.quote(query)
-                        info = ydl.extract_info(search_url, download=False)
-                        resultados = [r for r in (info.get("entries") or []) if r and r.get("id")] if info else []
             except Exception as err:
                 status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
                 page.update()
                 return
 
-            yt_watch_base = "https://" + "www.youtube.com/watch?v="
-            yt_img_base = "https://" + "i.ytimg.com/vi/"
+            yt_watch_base = "https://youtube.com"
+            yt_img_base = "https://ytimg.com"
 
             lista_resultados_yt.controls.clear()
             for item in resultados:
@@ -1008,16 +1008,15 @@ def main(page: ft.Page):
                         trailing=ft.IconButton(
                             icon=ft.Icons.DOWNLOAD,
                             tooltip="Descargar audio",
-                            on_click=lambda _, u=v_url: threading.Thread(
-                                target=descargar_playlist, args=(u, 1), daemon=True
-                            ).start(),
+                            on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 1),
                         ),
                     )
                 )
             status_busqueda.value = f"{len(resultados)} resultados encontrados"
             page.update()
 
-        threading.Thread(target=tarea_busqueda, daemon=True).start()
+        page.run_thread(tarea_busqueda)
+
 
 
 
