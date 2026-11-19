@@ -11,7 +11,7 @@ import threading
 import os
 import flet_audio as fta
 import flet_permission_handler as fph
-import flet_notifications as ftn  # <-- AÑADIR ARRIBA (requiere: pip install flet-notifications)
+import flet_notifications as ftn 
 
 from concurrent.futures import ThreadPoolExecutor
 
