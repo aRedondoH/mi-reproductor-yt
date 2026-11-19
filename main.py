@@ -306,71 +306,7 @@ def main(page: ft.Page):
     caratulas_buscadas = set()
     descargando_caratulas = False
 
-    def descargar_caratulas_faltantes():
-        nonlocal descargando_caratulas
-        if descargando_caratulas:
-            return
-        descargando_caratulas = True
-        try:
-            carpeta_actual_snap = ruta_actual
-            carpeta_caratulas = os.path.join(carpeta_actual_snap, ".caratulas")
-            pendientes = [
-                f for f in list(canciones_locales)
-                if (carpeta_actual_snap, f) not in caratulas_buscadas and obtener_caratula(f) is None
-            ]
-            if not pendientes:
-                return
-
-            opts = {"extract_flat": True, "quiet": True, "ignoreerrors": True}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                for archivo in pendientes:
-                    if ruta_actual != carpeta_actual_snap:
-                        break
-                    caratulas_buscadas.add((carpeta_actual_snap, archivo))
-                    base_nombre = os.path.splitext(archivo)[0]
-                    try:
-                        info = ydl.extract_info(f"ytsearch1:{base_nombre}", download=False)
-                        entries = info.get("entries") if info else None
-                        if not entries:
-                            continue
-                        primer_res = entries[0]
-                        vid_id = primer_res.get("id")
-                        thumb_url = primer_res.get("thumbnail") or (
-                            f"https://ytimg.com{vid_id}/hqdefault.jpg" if vid_id else None
-                        )
-
-                        if not thumb_url:
-                            continue
-
-                        ruta_audio = os.path.join(carpeta_actual_snap, archivo)
-                        incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre)
-                        if obtener_caratula(archivo):
-                            actualizar_lista_ui()
-                    except Exception:
-                        continue
-        finally:
-            descargando_caratulas = False
-
-    def escanear_canciones(e=None):
-        nonlocal canciones_locales
-        exts = (".m4a", ".mp3", ".webm", ".opus", ".ogg", ".wav", ".flac", ".aac")
-        try:
-            archivos = [
-                f for f in os.listdir(ruta_actual)
-                if os.path.isfile(os.path.join(ruta_actual, f)) and f.lower().endswith(exts)
-            ]
-            archivos.sort(key=lambda x: os.path.getmtime(os.path.join(ruta_actual, x)), reverse=True)
-            canciones_locales = archivos
-        except Exception as err:
-            canciones_locales = []
-            lista_canciones_ui.controls.clear()
-            lista_canciones_ui.controls.append(
-                ft.Text(f"Sin permiso para leer carpeta. Pulsa 'Elegir carpeta' o activa Audio en Ajustes. ({err})", color=ft.Colors.RED_300, size=12)
-            )
-            page.update()
-            return
-        actualizar_lista_ui()
-        threading.Thread(target=descargar_caratulas_faltantes, daemon=True).start()
+  
 
 
 
@@ -407,18 +343,21 @@ def main(page: ft.Page):
     #             )
     #         )
     #     page.update()
+
     def obtener_caratula(nombre_archivo):
         base = os.path.splitext(nombre_archivo)[0]
         carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
 
-        # 1. Buscar imagen en .caratulas o en la carpeta actual
         for carpeta in (carpeta_caratulas, ruta_actual):
             for ext in (".jpg", ".jpeg", ".png", ".webp"):
                 ruta_img = os.path.join(carpeta, base + ext)
                 if os.path.isfile(ruta_img):
                     return ruta_img
+        return None
 
-        # 2. (Opcional) Extraer carátula incrustada si mutagen está instalado
+    def extraer_caratula_embebida(nombre_archivo):
+        base = os.path.splitext(nombre_archivo)[0]
+        carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
         try:
             import mutagen
             ruta_audio = os.path.join(ruta_actual, nombre_archivo)
@@ -426,11 +365,11 @@ def main(page: ft.Page):
             datos_img = None
             if audio and getattr(audio, "tags", None):
                 for tag in audio.tags.values():
-                    if hasattr(tag, "data"):  # MP3 (APIC)
+                    if hasattr(tag, "data"):
                         datos_img = tag.data
                         break
-                if not datos_img and "covr" in audio.tags:  # M4A / MP4
-                    datos_img = bytes(audio.tags["covr"][0])
+                if not datos_img and "covr" in audio.tags:
+                    datos_img = bytes(audio.tags["covr"])
             if datos_img:
                 os.makedirs(carpeta_caratulas, exist_ok=True)
                 ruta_guardada = os.path.join(carpeta_caratulas, base + ".jpg")
@@ -439,9 +378,96 @@ def main(page: ft.Page):
                 return ruta_guardada
         except Exception:
             pass
-
         return None
 
+    def descargar_caratulas_faltantes():
+        nonlocal descargando_caratulas
+        if descargando_caratulas:
+            return
+        descargando_caratulas = True
+        try:
+            carpeta_actual_snap = ruta_actual
+            carpeta_caratulas = os.path.join(carpeta_actual_snap, ".caratulas")
+            hubo_cambios = False
+
+            for archivo in list(canciones_locales):
+                if ruta_actual != carpeta_actual_snap:
+                    break
+                if obtener_caratula(archivo) is None:
+                    if extraer_caratula_embebida(archivo):
+                        hubo_cambios = True
+
+            if hubo_cambios and ruta_actual == carpeta_actual_snap:
+                actualizar_lista_ui()
+                hubo_cambios = False
+
+            pendientes = [
+                f for f in list(canciones_locales)
+                if (carpeta_actual_snap, f) not in caratulas_buscadas and obtener_caratula(f) is None
+            ]
+            if not pendientes:
+                return
+
+            opts = {"extract_flat": True, "quiet": True, "ignoreerrors": True}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                for idx_p, archivo in enumerate(pendientes):
+                    if ruta_actual != carpeta_actual_snap:
+                        break
+                    caratulas_buscadas.add((carpeta_actual_snap, archivo))
+                    base_nombre = os.path.splitext(archivo)[0]
+                    try:
+                        info = ydl.extract_info(f"ytsearch1:{base_nombre}", download=False)
+                        entries = info.get("entries") if info else None
+                        if not entries:
+                            continue
+                        primer_res = entries[0]
+                        vid_id = primer_res.get("id")
+                        yt_img_base = "https://" + "ytimg.com" + "/vi/"
+                        thumb_url = primer_res.get("thumbnail") or (
+                            f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None
+                        )
+
+
+                        if not thumb_url:
+                            continue
+
+                        ruta_audio = os.path.join(carpeta_actual_snap, archivo)
+                        incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre)
+                        if obtener_caratula(archivo):
+                            hubo_cambios = True
+                            if idx_p % 3 == 0:
+                                actualizar_lista_ui()
+                                hubo_cambios = False
+                    except Exception:
+                        continue
+
+            if hubo_cambios and ruta_actual == carpeta_actual_snap:
+                actualizar_lista_ui()
+        finally:
+            descargando_caratulas = False
+
+    def escanear_canciones(e=None):
+        nonlocal canciones_locales
+        exts = (".m4a", ".mp3", ".webm", ".opus", ".ogg", ".wav", ".flac", ".aac")
+        try:
+            archivos = [
+                f for f in os.listdir(ruta_actual)
+                if os.path.isfile(os.path.join(ruta_actual, f)) and f.lower().endswith(exts)
+            ]
+            archivos.sort(key=lambda x: os.path.getmtime(os.path.join(ruta_actual, x)), reverse=True)
+            canciones_locales = archivos
+        except Exception as err:
+            canciones_locales = []
+            lista_canciones_ui.controls.clear()
+            lista_canciones_ui.controls.append(
+                ft.Text(f"Sin permiso para leer carpeta. Pulsa 'Elegir carpeta' o activa Audio en Ajustes. ({err})", color=ft.Colors.RED_300, size=12)
+            )
+            page.update()
+            return
+        actualizar_lista_ui()
+        threading.Thread(target=descargar_caratulas_faltantes, daemon=True).start()
+
+    
     def actualizar_lista_ui():
         lista_canciones_ui.controls.clear()
         for i, archivo in enumerate(canciones_locales):
@@ -798,6 +824,7 @@ def main(page: ft.Page):
         ], spacing=4),
     )
 
+
     async def reproducir_video_youtube(video_url, titulo):
         nonlocal indice_actual
         indice_actual = -1
@@ -809,15 +836,36 @@ def main(page: ft.Page):
         page.update()
 
         def extraer_stream():
-            fmt = "best[ext=mp4]/best" if video_player else "bestaudio[ext=m4a]/bestaudio"
-            opts = {"format": fmt, "quiet": True, "no_warnings": True}
+            fmt = (
+                "best[ext=mp4][vcodec!=none][acodec!=none]/"
+                "best[vcodec!=none][acodec!=none]/"
+                "best"
+            ) if video_player else "bestaudio[ext=m4a]/bestaudio/best"
+            opts = {
+                "format": fmt,
+                "quiet": True,
+                "no_warnings": True,
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            }
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(video_url, download=False)
-                return info.get("url"), info.get("title", titulo)
+                url_directa = info.get("url")
+                headers = info.get("http_headers") or {}
+                if not url_directa and info.get("formats"):
+                    validos = [
+                        f for f in info["formats"]
+                        if f.get("url") and f.get("vcodec") != "none" and f.get("acodec") != "none"
+                    ]
+                    if not validos:
+                        validos = [f for f in info["formats"] if f.get("url")]
+                    if validos:
+                        url_directa = validos[-1]["url"]
+                        headers = validos[-1].get("http_headers") or headers
+                return url_directa, info.get("title", titulo), headers
 
         try:
             loop = asyncio.get_running_loop()
-            stream_url, titulo_real = await loop.run_in_executor(None, extraer_stream)
+            stream_url, titulo_real, headers = await loop.run_in_executor(None, extraer_stream)
             if not stream_url:
                 status_busqueda.value = "No se pudo obtener el vídeo."
                 page.update()
@@ -827,8 +875,9 @@ def main(page: ft.Page):
             lbl_video_mini.value = titulo_real
 
             if video_player:
+                await video_player.pause()
                 contenedor_video_mini.visible = True
-                video_player.playlist = [ftv.VideoMedia(resource=stream_url)]
+                video_player.playlist = [ftv.VideoMedia(resource=stream_url, http_headers=headers)]
                 page.update()
                 await video_player.play()
             else:
@@ -837,9 +886,10 @@ def main(page: ft.Page):
                 await audio_player.play()
 
             await actualizar_notificacion_bloqueo(titulo_custom=titulo_real)
+
         except Exception as err:
             lbl_cancion_actual.value = "Error al reproducir vídeo"
-            status_busqueda.value = f"Error: {str(err)[:50]}"
+            status_busqueda.value = f"Error: {str(err)[:65]}"
             page.update()
 
     def buscar_youtube_click(e=None):
@@ -868,13 +918,66 @@ def main(page: ft.Page):
                 canal = item.get('uploader', '')
                 duracion = item.get('duration')
                 dur_str = f"{int(duracion // 60):02d}:{int(duracion % 60):02d}" if duracion else ""
-                v_url = item.get('url') or f"https://youtube.com{item.get('id')}"
+                vid_id = item.get('id')
+                
+                # v_url = item.get('url') or f"https://youtube.com{vid_id}"
 
+                # thumbs = item.get('thumbnails') or []
+                # thumb_url = (
+                #     item.get('thumbnail')
+                #     or (thumbs[-1].get('url') if thumbs else None)
+                #     or (f"https://ytimg.com{vid_id}/hqdefault.jpg" if vid_id else None)
+                # )
+                yt_watch_base = "https://" + "youtube.com" + "/watch?v="
+                yt_img_base = "https://" + "ytimg.com" + "/vi/"
+
+                v_url = item.get('url') or f"{yt_watch_base}{vid_id}"
+
+                thumbs = item.get('thumbnails') or []
+                thumb_url = (
+                    item.get('thumbnail')
+                    or (thumbs[-1].get('url') if thumbs else None)
+                    or (f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None)
+                )
+
+
+
+                if thumb_url:
+                    portada = ft.Container(
+                        width=76,
+                        height=44,
+                        border_radius=6,
+                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                        bgcolor=ft.Colors.GREY_900,
+                        content=ft.Stack([
+                            ft.Image(
+                                src=thumb_url,
+                                width=76,
+                                height=44,
+                                fit=ft.BoxFit.COVER,
+                            ),
+                            ft.Container(
+                                alignment=ft.Alignment.CENTER,
+                                bgcolor=ft.Colors.BLACK26,
+                                content=ft.Icon(ft.Icons.PLAY_ARROW, color=ft.Colors.WHITE, size=20),
+                            ),
+                        ]),
+                    )
+                else:
+                    portada = ft.Container(
+                        width=76,
+                        height=44,
+                        border_radius=6,
+                        bgcolor=ft.Colors.GREY_800,
+                        alignment=ft.Alignment.CENTER,
+                        content=ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
+                    )
 
                 lista_resultados_yt.controls.append(
                     ft.ListTile(
                         dense=True,
-                        leading=ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
+                        content_padding=ft.Padding.symmetric(horizontal=4, vertical=2),
+                        leading=portada,
                         title=ft.Text(titulo, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                         subtitle=ft.Text(f"{canal} • {dur_str}".strip(" •"), size=11, color=ft.Colors.GREY_400),
                         on_click=lambda _, u=v_url, t=titulo: page.run_task(reproducir_video_youtube, u, t),
@@ -892,6 +995,7 @@ def main(page: ft.Page):
 
         threading.Thread(target=tarea_busqueda, daemon=True).start()
 
+
     vista_buscador = ft.Container(
         padding=ft.Padding.symmetric(horizontal=12, vertical=8),
         expand=True,
@@ -906,7 +1010,6 @@ def main(page: ft.Page):
             lista_resultados_yt,
         ], expand=True, spacing=8)
     )
-
 
 
     tabs = ft.Tabs(
