@@ -537,7 +537,7 @@ def main(page: ft.Page):
                         [
                             img,
                             ft.Container(
-                                bgcolor=ft.Colors.BLACK54,
+                                bgcolor=ft.Colors.BLACK_54,
                                 alignment=ft.Alignment.CENTER,
                                 content=ft.Icon(ft.Icons.GRAPHIC_EQ, size=20, color=ft.Colors.WHITE),
                             ),
@@ -959,61 +959,78 @@ def main(page: ft.Page):
         lista_resultados_yt.controls.clear()
         page.update()
 
+        def buscar_en_web_yt(texto_busqueda):
+            import json
+            import re
+
+            params = urllib.parse.urlencode({"search_query": texto_busqueda})
+            url_busqueda = f"https://youtube.com?{params}"
+            req = urllib.request.Request(
+                url_busqueda,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+                },
+            )
+            html = urllib.request.urlopen(req, timeout=8).read().decode("utf-8", errors="ignore")
+            items = []
+
+            match = re.search(r"var ytInitialData\s*=\s*(\{.*?\});\s*</script>", html, re.DOTALL)
+            if match:
+                data = json.loads(match.group(1))
+                sections = (
+                    data.get("contents", {})
+                    .get("twoColumnSearchResultsRenderer", {})
+                    .get("primaryContents", {})
+                    .get("sectionListRenderer", {})
+                    .get("contents", [])
+                )
+                for sec in sections:
+                    for item in sec.get("itemSectionRenderer", {}).get("contents", []):
+                        vr = item.get("videoRenderer")
+                        if not vr or not vr.get("videoId"):
+                            continue
+                        titulo_runs = vr.get("title", {}).get("runs", [])
+                        canal_runs = vr.get("ownerText", {}).get("runs", [])
+                        dur_txt = vr.get("lengthText", {}).get("simpleText", "")
+                        items.append({
+                            "id": vr["videoId"],
+                            "title": titulo_runs[0]["text"] if titulo_runs else "Sin título",
+                            "channel": canal_runs[0]["text"] if canal_runs else "",
+                            "duration_text": dur_txt,
+                        })
+                        if len(items) >= 15:
+                            break
+                    if len(items) >= 15:
+                        break
+
+            if not items:
+                ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)))[:15]
+                for vid in ids:
+                    items.append({"id": vid, "title": f"Vídeo ({vid})", "channel": "", "duration_text": ""})
+
+            return items
+
         def tarea_busqueda():
-            opts = {
-                "extract_flat": True,
-                "quiet": True,
-                "no_warnings": True,
-                "ignoreerrors": True,
-                "nocheckcertificate": True,
-                "source_address": "0.0.0.0",
-                "socket_timeout": 10,
-            }
             resultados = []
             try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(f"ytsearch15:{query}", download=False)
-                    resultados = [r for r in (info.get("entries") or []) if r] if info else []
-            except Exception:
-                resultados = []
+                resultados = buscar_en_web_yt(query)
+            except Exception as err:
+                status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
+                page.update()
+                return
 
-            if not resultados:
-                try:
-                    import re
-                    yt_search_url = "https://" + "://youtube.com" + urllib.parse.quote(query)
-                    req = urllib.request.Request(yt_search_url, headers={"User-Agent": "Mozilla/5.0"})
-                    html = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", errors="ignore")
-                    ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)))[:15]
-                    titulos = re.findall(r'"title":\{"runs":\[\{"text":"([^"]+)"\}\]', html)
-                    for idx_r, vid in enumerate(ids):
-                        resultados.append({
-                            "id": vid,
-                            "title": titulos[idx_r] if idx_r < len(titulos) else f"Vídeo {vid}",
-                        })
-                except Exception as err:
-                    status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
-                    page.update()
-                    return
-
-            yt_watch_base = "https://" + "www.youtube.com/watch?v="
-            yt_img_base = "https://" + "i.ytimg.com/vi/"
+            yt_watch_base = "https://youtube.com"
+            yt_img_base = "https://i.ytimg.com/vi/"
 
             lista_resultados_yt.controls.clear()
             for item in resultados:
                 titulo = item.get("title", "Sin título")
-                canal = item.get("uploader") or item.get("channel") or ""
-                duracion = item.get("duration")
-                dur_str = f"{int(duracion // 60):02d}:{int(duracion % 60):02d}" if duracion else ""
+                canal = item.get("channel") or ""
+                dur_str = item.get("duration_text") or ""
                 vid_id = item.get("id")
-                raw_url = item.get("url") or ""
-                v_url = raw_url if raw_url.startswith("http") else f"{yt_watch_base}{vid_id}"
-
-                thumbs = item.get("thumbnails") or []
-                thumb_url = (
-                    item.get("thumbnail")
-                    or (thumbs[-1].get("url") if thumbs else None)
-                    or (f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None)
-                )
+                v_url = f"{yt_watch_base}{vid_id}"
+                thumb_url = f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None
 
                 if thumb_url:
                     portada = ft.Container(
@@ -1031,7 +1048,7 @@ def main(page: ft.Page):
                             ),
                             ft.Container(
                                 alignment=ft.Alignment.CENTER,
-                                bgcolor=ft.Colors.BLACK26,
+                                bgcolor=ft.Colors.BLACK_26,
                                 content=ft.Icon(ft.Icons.PLAY_ARROW, color=ft.Colors.WHITE, size=20),
                             ),
                         ]),
@@ -1065,6 +1082,7 @@ def main(page: ft.Page):
             page.update()
 
         page.run_thread(tarea_busqueda)
+
 
 
 
