@@ -29,7 +29,10 @@ jobs:
           pip install --upgrade flet flet-audio flet-permission-handler flet-notifications yt-dlp
         
       - name: Compilar APK
-        run: flet build apk --yes --verbose
+        timeout-minutes: 45
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
+        run: flet build apk --arch arm64-v8a
 
       - name: Subir APK generado
         uses: actions/upload-artifact@v4
