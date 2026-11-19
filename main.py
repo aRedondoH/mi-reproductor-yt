@@ -48,76 +48,98 @@ def main(page: ft.Page):
     page.padding = 0
 
     permisos = fph.PermissionHandler()
+
+    
+    notif_lock = asyncio.Lock()
+    accion_en_curso = False
+    ultima_caratula_cache = (None, None)
+
     async def manejar_accion_notificacion(e: ftn.NotificationActionEvent):
-        if e.action_id == "prev":
-            await anterior_cancion(None)
-        elif e.action_id == "play_pause":
-            await toggle_play_pause(None)
-        elif e.action_id == "next":
-            await siguiente_cancion(None)
+        nonlocal accion_en_curso
+        if accion_en_curso:
+            return
+        accion_en_curso = True
+        try:
+            if e.action_id == "prev":
+                await anterior_cancion(None)
+            elif e.action_id == "play_pause":
+                await toggle_play_pause(None)
+            elif e.action_id == "next":
+                await siguiente_cancion(None)
+        finally:
+            await asyncio.sleep(0.25)
+            accion_en_curso = False
 
     notificaciones = ftn.Notifications(on_action=manejar_accion_notificacion)
     page.services.append(notificaciones) if hasattr(page, "services") else page.overlay.append(notificaciones)
 
     async def actualizar_notificacion_bloqueo(titulo_custom=None, caratula_custom=None):
-        if titulo_custom:
-            titulo = titulo_custom
-            ruta_caratula = caratula_custom
-        else:
-            if indice_actual < 0 or indice_actual >= len(canciones_locales):
-                return
-            nombre_archivo = canciones_locales[indice_actual]
-            titulo = os.path.splitext(nombre_archivo)[0]
-            ruta_caratula = obtener_caratula(nombre_archivo)
+        nonlocal ultima_caratula_cache
+        if notif_lock.locked():
+            return
+        async with notif_lock:
+            if titulo_custom:
+                titulo = titulo_custom
+                ruta_caratula = caratula_custom
+            else:
+                if indice_actual < 0 or indice_actual >= len(canciones_locales):
+                    return
+                nombre_archivo = canciones_locales[indice_actual]
+                titulo = os.path.splitext(nombre_archivo)[0]
+                ruta_caratula = obtener_caratula(nombre_archivo)
 
-        texto_boton = "⏸ Pausar" if esta_reproduciendo else "▶ Reproducir"
-        # large_icon = ftn.AndroidFileBitmap(ruta_caratula) if ruta_caratula and os.path.isfile(ruta_caratula) else None
-        large_icon = None
-        if ruta_caratula and os.path.isfile(ruta_caratula):
-            try:
-                with open(ruta_caratula, "rb") as f:
-                    large_icon = ftn.AndroidBytesBitmap(data=f.read())
-            except Exception:
-                large_icon = None
+            texto_boton = "⏸" if esta_reproduciendo else "▶"
+            large_icon = None
+            if ruta_caratula and os.path.isfile(ruta_caratula):
+                if ultima_caratula_cache[0] == ruta_caratula:
+                    large_icon = ultima_caratula_cache[1]
+                else:
+                    try:
+                        with open(ruta_caratula, "rb") as f:
+                            large_icon = ftn.AndroidBytesBitmap(data=f.read())
+                        ultima_caratula_cache = (ruta_caratula, large_icon)
+                    except Exception:
+                        large_icon = None
 
-        await notificaciones.show(
-            id=1001,
-            title=titulo,
-            body="Reproduciendo" if esta_reproduciendo else "En pausa",
-            actions=[
-                ftn.NotificationAction(
-                    id="prev",
-                    title="⏮ Anterior",
-                    cancel_notification=False,
-                    foreground=False,
-                    require_authentication=False,
+            await notificaciones.show(
+                id=1001,
+                title=titulo,
+                body="Reproduciendo" if esta_reproduciendo else "En pausa",
+                actions=[
+                    ftn.NotificationAction(
+                        id="prev",
+                        title="⏮",
+                        cancel_notification=False,
+                        foreground=False,
+                        require_authentication=False,
+                    ),
+                    ftn.NotificationAction(
+                        id="play_pause",
+                        title=texto_boton,
+                        cancel_notification=False,
+                        foreground=False,
+                        require_authentication=False,
+                    ),
+                    ftn.NotificationAction(
+                        id="next",
+                        title="⏭",
+                        cancel_notification=False,
+                        foreground=False,
+                        require_authentication=False,
+                    ),
+                ],
+                options=ftn.NotificationOptions(
+                    android=ftn.AndroidOptions(
+                        ongoing=True,
+                        silent=True,
+                        only_alert_once=True,
+                        large_icon=large_icon,
+                        category=ftn.AndroidCategory.TRANSPORT,
+                        visibility=ftn.AndroidVisibility.PUBLIC,
+                    )
                 ),
-                ftn.NotificationAction(
-                    id="play_pause",
-                    title=texto_boton,
-                    cancel_notification=False,
-                    foreground=False,
-                    require_authentication=False,
-                ),
-                ftn.NotificationAction(
-                    id="next",
-                    title="⏭ Siguiente",
-                    cancel_notification=False,
-                    foreground=False,
-                    require_authentication=False,
-                ),
-            ],
-            options=ftn.NotificationOptions(
-                android=ftn.AndroidOptions(
-                    ongoing=True,
-                    silent=True,
-                    only_alert_once=True,
-                    large_icon=large_icon,
-                    category=ftn.AndroidCategory.TRANSPORT,
-                    visibility=ftn.AndroidVisibility.PUBLIC,
-                )
-            ),
-        )
+            )
+
 
 
     
@@ -279,7 +301,7 @@ def main(page: ft.Page):
         audio_player.src = os.path.join(ruta_actual, nombre)
         page.update()
         await audio_player.play()
-        page.run_task(actualizar_notificacion_bloqueo)
+        # page.run_task(actualizar_notificacion_bloqueo)
 
 
 
@@ -951,6 +973,7 @@ def main(page: ft.Page):
             status_busqueda.value = f"Error: {str(err)[:65]}"
             page.update()
 
+
     def buscar_youtube_click(e=None):
         query = busqueda_input.value.strip()
         if not query:
@@ -963,13 +986,15 @@ def main(page: ft.Page):
             import json
             import re
 
+            yt_host = "https://youtube.com"
             params = urllib.parse.urlencode({"search_query": texto_busqueda})
-            url_busqueda = f"https://youtube.com?{params}"
+            url_busqueda = yt_host + "/results?" + params
             req = urllib.request.Request(
                 url_busqueda,
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+                    "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+667",
                 },
             )
             html = urllib.request.urlopen(req, timeout=8).read().decode("utf-8", errors="ignore")
@@ -1005,9 +1030,49 @@ def main(page: ft.Page):
                         break
 
             if not items:
-                ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)))[:15]
-                for vid in ids:
-                    items.append({"id": vid, "title": f"Vídeo ({vid})", "channel": "", "duration_text": ""})
+                api_url = yt_host + "/youtubei/v1/search?prettyPrint=false"
+                payload = json.dumps({
+                    "context": {
+                        "client": {
+                            "clientName": "WEB",
+                            "clientVersion": "2.20240501.01.00",
+                            "hl": "es",
+                            "gl": "ES",
+                        }
+                    },
+                    "query": texto_busqueda,
+                }).encode("utf-8")
+                req_api = urllib.request.Request(
+                    api_url,
+                    data=payload,
+                    headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                )
+                resp_json = json.loads(urllib.request.urlopen(req_api, timeout=8).read().decode("utf-8"))
+                sections = (
+                    resp_json.get("contents", {})
+                    .get("twoColumnSearchResultsRenderer", {})
+                    .get("primaryContents", {})
+                    .get("sectionListRenderer", {})
+                    .get("contents", [])
+                )
+                for sec in sections:
+                    for item in sec.get("itemSectionRenderer", {}).get("contents", []):
+                        vr = item.get("videoRenderer")
+                        if not vr or not vr.get("videoId"):
+                            continue
+                        titulo_runs = vr.get("title", {}).get("runs", [])
+                        canal_runs = vr.get("ownerText", {}).get("runs", [])
+                        dur_txt = vr.get("lengthText", {}).get("simpleText", "")
+                        items.append({
+                            "id": vr["videoId"],
+                            "title": titulo_runs[0]["text"] if titulo_runs else "Sin título",
+                            "channel": canal_runs[0]["text"] if canal_runs else "",
+                            "duration_text": dur_txt,
+                        })
+                        if len(items) >= 15:
+                            break
+                    if len(items) >= 15:
+                        break
 
             return items
 
@@ -1020,8 +1085,8 @@ def main(page: ft.Page):
                 page.update()
                 return
 
-            yt_watch_base = "https://youtube.com"
-            yt_img_base = "https://i.ytimg.com/vi/"
+            yt_watch_base = "https://youtube.com" + "/watch?v="
+            yt_img_base = "https://ytimg.com" + "/vi/"
 
             lista_resultados_yt.controls.clear()
             for item in resultados:
@@ -1082,6 +1147,7 @@ def main(page: ft.Page):
             page.update()
 
         page.run_thread(tarea_busqueda)
+
 
 
 
