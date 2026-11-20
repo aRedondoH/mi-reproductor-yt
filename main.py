@@ -43,7 +43,6 @@ def main(page: ft.Page):
 
     permisos = fph.PermissionHandler()
 
-    
     ultima_caratula_cache = (None, None)
     titulo_stream_actual = None
     caratula_stream_actual = None
@@ -62,9 +61,9 @@ def main(page: ft.Page):
 
     async def _enviar_notificacion_async(titulo, ruta_caratula, reproduciendo):
         nonlocal ultima_caratula_cache
-        await asyncio.sleep(0.15)  # Evita colapsar Android si cambian estados rápido
+        await asyncio.sleep(0.25)
 
-        texto_boton = "  ⏸  " if reproduciendo else "  ▶  "
+        texto_boton = "   ❚❚   " if reproduciendo else "   ▶   "
         large_icon = None
 
         if ruta_caratula and os.path.isfile(ruta_caratula):
@@ -79,6 +78,16 @@ def main(page: ft.Page):
                 except Exception:
                     large_icon = None
 
+        estilo_android = (
+            ftn.AndroidBigPictureStyle(
+                image=large_icon,
+                content_title=titulo,
+                summary_text="Reproduciendo" if reproduciendo else "En pausa",
+            )
+            if large_icon
+            else None
+        )
+
         try:
             await asyncio.wait_for(
                 notificaciones.show(
@@ -88,7 +97,7 @@ def main(page: ft.Page):
                     actions=[
                         ftn.NotificationAction(
                             id="prev",
-                            title="  ⏮  ",
+                            title="   ◀◀   ",
                             cancel_notification=False,
                             foreground=False,
                             require_authentication=False,
@@ -102,7 +111,7 @@ def main(page: ft.Page):
                         ),
                         ftn.NotificationAction(
                             id="next",
-                            title="  ⏭  ",
+                            title="   ▶▶   ",
                             cancel_notification=False,
                             foreground=False,
                             require_authentication=False,
@@ -114,6 +123,7 @@ def main(page: ft.Page):
                             silent=True,
                             only_alert_once=True,
                             large_icon=large_icon,
+                            style=estilo_android,
                             category=ftn.AndroidCategory.TRANSPORT,
                             visibility=ftn.AndroidVisibility.PUBLIC,
                         )
@@ -146,6 +156,8 @@ def main(page: ft.Page):
         tarea_notif_pendiente = page.run_task(
             _enviar_notificacion_async, titulo, ruta_caratula, esta_reproduciendo
         )
+
+    
    
 
 
@@ -271,35 +283,54 @@ def main(page: ft.Page):
 
     page.services.append(audio_player) if hasattr(page, "services") else page.overlay.append(audio_player)
 
+    reproduccion_lock = asyncio.Lock()
+    token_reproduccion = 0
+
     async def reproducir_indice(idx):
-        nonlocal indice_actual, cambiando_pista, titulo_stream_actual
+        nonlocal indice_actual, cambiando_pista, titulo_stream_actual, token_reproduccion, esta_reproduciendo
         if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
             return
-        if contenedor_video_mini.visible:
-            await cerrar_reproductor_video()
 
+        token_reproduccion += 1
+        mi_token = token_reproduccion
+        anterior_idx = indice_actual
+        indice_actual = idx
         titulo_stream_actual = None
-        cambiando_pista = True
-        try:
-            anterior_idx = indice_actual
-            indice_actual = idx
-            nombre = canciones_locales[indice_actual]
-            lbl_cancion_actual.value = os.path.splitext(nombre)[0]
-            slider_progreso.value = 0
-            slider_progreso.max = 100
 
-            for pos in (anterior_idx, indice_actual):
-                if 0 <= pos < len(lista_canciones_ui.controls):
-                    tile = lista_canciones_ui.controls[pos]
-                    if isinstance(tile.title, ft.Text):
-                        tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
+        nombre = canciones_locales[indice_actual]
+        lbl_cancion_actual.value = os.path.splitext(nombre)[0]
+        slider_progreso.value = 0
+        slider_progreso.max = 100
 
-            audio_player.src = os.path.join(ruta_actual, nombre)
-            page.update()
-            await audio_player.play()
-        finally:
-            await asyncio.sleep(0.15)
-            cambiando_pista = False
+        for pos in (anterior_idx, indice_actual):
+            if 0 <= pos < len(lista_canciones_ui.controls):
+                tile = lista_canciones_ui.controls[pos]
+                if isinstance(tile.title, ft.Text):
+                    tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
+        page.update()
+
+        async with reproduccion_lock:
+            if mi_token != token_reproduccion:
+                return
+            if contenedor_video_mini.visible:
+                await cerrar_reproductor_video()
+
+            cambiando_pista = True
+            try:
+                audio_player.src = os.path.join(ruta_actual, nombre)
+                page.update()
+                await asyncio.sleep(0.05)
+                if mi_token != token_reproduccion:
+                    return
+                await audio_player.play()
+                esta_reproduciendo = True
+                btn_play_pause.icon = ft.Icons.PAUSE
+                page.update()
+                await actualizar_notificacion_bloqueo()
+            finally:
+                await asyncio.sleep(0.2)
+                if mi_token == token_reproduccion:
+                    cambiando_pista = False
 
     async def toggle_play_pause(e):
         nonlocal esta_reproduciendo
@@ -325,18 +356,16 @@ def main(page: ft.Page):
         else:
             await audio_player.resume()
 
-
-
-
-    
-
     async def siguiente_cancion(e):
         if canciones_locales:
-            await reproducir_indice((indice_actual + 1) % len(canciones_locales))
+            base = indice_actual if 0 <= indice_actual < len(canciones_locales) else -1
+            await reproducir_indice((base + 1) % len(canciones_locales))
 
     async def anterior_cancion(e):
         if canciones_locales:
-            await reproducir_indice((indice_actual - 1) % len(canciones_locales))
+            base = indice_actual if 0 <= indice_actual < len(canciones_locales) else 0
+            await reproducir_indice((base - 1) % len(canciones_locales))
+
 
     def on_slider_start(e):
         nonlocal arrastrando_slider
@@ -621,20 +650,29 @@ def main(page: ft.Page):
     log_column = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
 
     
-    # Candado para evitar conflictos visuales entre hilos
     ui_lock = threading.Lock()
+    descarga_en_curso = False
+
+    async def _ejecutar_en_ui(fn):
+        try:
+            fn()
+            page.update()
+        except Exception:
+            pass
+
+    def ui_sync(fn):
+        try:
+            page.run_task(_ejecutar_en_ui, fn)
+        except Exception:
+            pass
 
     def log(mensaje):
-        with ui_lock:
-            log_view.controls.append(ft.Text(mensaje, size=12, selectable=True))
-            if len(log_view.controls) > 150:
-                del log_view.controls[:len(log_view.controls) - 150]
-            try:
-                page.update()
-            except Exception:
-                pass
+        def _agregar():
+            log_column.controls.append(ft.Text(mensaje, size=12, selectable=True))
+            if len(log_column.controls) > 150:
+                log_column.controls = log_column.controls[-150:]
+        ui_sync(_agregar)
 
-            
     def incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre):
         os.makedirs(carpeta_caratulas, exist_ok=True)
         datos_img = None
@@ -679,137 +717,167 @@ def main(page: ft.Page):
         except Exception:
             pass
 
-
     def descargar_playlist(url, max_hilos):
-        os.makedirs(ruta_actual, exist_ok=True)
+        nonlocal descarga_en_curso
+        if descarga_en_curso:
+            log("⚠ Ya hay una descarga en curso. Espera a que termine.")
+            return
 
-        with ui_lock:
-            status_text.value = "Extrayendo canciones de la lista..."
-            progress_bar.visible = True
-            progress_bar.value = None
-            page.update()
-
-        ydl_extract_opts = {
-            'extract_flat': 'in_playlist',
-            'quiet': True,
-            'ignoreerrors': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-        }
-
-        urls_videos = []
+        descarga_en_curso = True
         try:
-            with yt_dlp.YoutubeDL(ydl_extract_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if info and 'entries' in info and info['entries']:
-                    for entry in info['entries']:
-                        if not entry:
-                            continue
-                        vid_id = entry.get('id')
-                        v_url = entry.get('url')
-                        if v_url and not v_url.startswith("http"):
-                            v_url = "".join(["https://", "www.", "youtube.com", "/watch?v=", v_url])
-                        elif not v_url and vid_id:
-                            v_url = "".join(["https://", "www.", "youtube.com", "/watch?v=", vid_id])
-                        if v_url:
-                            urls_videos.append((v_url, entry.get('title') or vid_id or "Vídeo"))
-                elif info:
-                    urls_videos = [(url, info.get('title') or "Vídeo")]
-        except Exception as e:
-            with ui_lock:
-                status_text.value = f"Error al leer lista: {str(e)}"
-                btn_descargar.disabled = False
-                progress_bar.visible = False
-                page.update()
-            return
+            os.makedirs(ruta_actual, exist_ok=True)
 
-        total = len(urls_videos)
-        if total == 0:
-            with ui_lock:
-                status_text.value = "No se encontraron videos."
-                btn_descargar.disabled = False
-                progress_bar.visible = False
-                page.update()
-            return
+            def _prep_ui():
+                btn_descargar.disabled = True
+                log_column.controls = []
+                status_text.value = "Extrayendo canciones de la lista..."
+                progress_bar.visible = True
+                progress_bar.value = None
+            ui_sync(_prep_ui)
 
-        completadas = 0
-        exitosas = 0
-        fallidas = 0
-
-        with ui_lock:
-            progress_bar.value = 0
-            status_text.value = f"Descargando 0 de {total} ({max_hilos} hilos)..."
-            page.update()
-
-        def descargar_una(item):
-            nonlocal completadas, exitosas, fallidas
-            video_url, titulo_previo = item
-            carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
-            os.makedirs(carpeta_caratulas, exist_ok=True)
-
-            ydl_opts = {
-                'format': 'bestaudio[ext=m4a]/bestaudio/best',
-                'outtmpl': {
-                    'default': f'{ruta_actual}/%(title)s.%(ext)s',
-                    'thumbnail': f'{carpeta_caratulas}/%(title)s.%(ext)s',
-                },
-                'writethumbnail': True,
-                'ignoreerrors': False,
-                'abort_on_error': False,
+            ydl_extract_opts = {
+                'extract_flat': 'in_playlist',
+                'noplaylist': False,
                 'quiet': True,
+                'ignoreerrors': True,
                 'no_warnings': True,
                 'nocheckcertificate': True,
-                'retries': 3,
-                'fragment_retries': 3,
-                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
             }
 
+            urls_videos = []
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info_video = ydl.extract_info(video_url, download=True)
-                    if not info_video:
-                        raise RuntimeError("Vídeo privado, eliminado o no disponible")
-                    ruta_archivo = ydl.prepare_filename(info_video)
-                    if not os.path.exists(ruta_archivo):
-                        raise RuntimeError("No se generó el archivo descargado")
-                    titulo_real = info_video.get('title') or titulo_previo
-                    base_nombre = os.path.splitext(os.path.basename(ruta_archivo))[0]
-                    try:
-                        incrustar_caratula_en_audio(
-                            ruta_archivo, info_video.get("thumbnail"), carpeta_caratulas, base_nombre
-                        )
-                    except Exception:
-                        pass
-                    exitosas += 1
-                    log(f"✔ Descarga finalizada con éxito: {titulo_real}")
-            except BaseException as e:
-                fallidas += 1
-                msg_error = str(e).replace("ERROR: ", "").strip() or "Error desconocido"
-                log(f"✖ Falló ({titulo_previo}): {msg_error[:75]}")
-            finally:
-                with ui_lock:
-                    completadas += 1
-                    progress_bar.value = completadas / total
-                    status_text.value = (
-                        f"Progreso: {completadas}/{total} (✔ {exitosas} | ✖ {fallidas})"
-                    )
-                    try:
-                        page.update()
-                    except Exception:
-                        pass
+                with yt_dlp.YoutubeDL(ydl_extract_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if info and 'entries' in info and info['entries']:
+                        for entry in info['entries']:
+                            if not entry:
+                                continue
+                            vid_id = entry.get('id')
+                            v_url = entry.get('url')
+                            if v_url and not v_url.startswith("http"):
+                                v_url = "".join(["https://", "www.", "youtube.com", "/watch?v=", v_url])
+                            elif not v_url and vid_id:
+                                v_url = "".join(["https://", "www.", "youtube.com", "/watch?v=", vid_id])
+                            if v_url:
+                                urls_videos.append((v_url, entry.get('title') or vid_id or "Vídeo"))
+                    elif info:
+                        urls_videos = [(url, info.get('title') or "Vídeo")]
+            except Exception as e:
+                def _err_lista():
+                    status_text.value = f"Error al leer lista: {str(e)[:65]}"
+                    btn_descargar.disabled = False
+                    progress_bar.visible = False
+                ui_sync(_err_lista)
+                return
 
-        with ThreadPoolExecutor(max_workers=max_hilos) as executor:
-            futures = [executor.submit(descargar_una, item) for item in urls_videos]
-            for f in futures:
+            total = len(urls_videos)
+            if total == 0:
+                def _sin_videos():
+                    status_text.value = "No se encontraron videos."
+                    btn_descargar.disabled = False
+                    progress_bar.visible = False
+                ui_sync(_sin_videos)
+                return
+
+            completadas = 0
+            exitosas = 0
+            fallidas = 0
+
+            def _inicio_desc():
+                progress_bar.value = 0
+                status_text.value = f"Descargando 0 de {total} ({max_hilos} hilos)..."
+            ui_sync(_inicio_desc)
+
+            def descargar_una(item):
+                nonlocal completadas, exitosas, fallidas
+                video_url, titulo_previo = item
+                carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
+                os.makedirs(carpeta_caratulas, exist_ok=True)
+
+                ydl_opts = {
+                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+                    'noplaylist': True,
+                    'outtmpl': {
+                        'default': f'{ruta_actual}/%(title)s.%(ext)s',
+                        'thumbnail': f'{carpeta_caratulas}/%(title)s.%(ext)s',
+                    },
+                    'writethumbnail': True,
+                    'ignoreerrors': False,
+                    'abort_on_error': False,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'nocheckcertificate': True,
+                    'retries': 3,
+                    'fragment_retries': 3,
+                    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                }
+
                 try:
-                    f.result()
-                except BaseException:
-                    pass
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info_video = ydl.extract_info(video_url, download=True)
+                        if not info_video:
+                            raise RuntimeError("Vídeo privado, eliminado o no disponible")
+                        ruta_archivo = ydl.prepare_filename(info_video)
+                        if not os.path.exists(ruta_archivo):
+                            raise RuntimeError("No se generó el archivo descargado")
+                        titulo_real = info_video.get('title') or titulo_previo
+                        base_nombre = os.path.splitext(os.path.basename(ruta_archivo))[0]
+                        try:
+                            incrustar_caratula_en_audio(
+                                ruta_archivo, info_video.get("thumbnail"), carpeta_caratulas, base_nombre
+                            )
+                        except Exception:
+                            pass
+                        with ui_lock:
+                            exitosas += 1
+                        log(f"✔ Descarga finalizada con éxito: {titulo_real}")
+                except BaseException as e:
+                    with ui_lock:
+                        fallidas += 1
+                    msg_error = str(e).replace("ERROR: ", "").strip() or "Error desconocido"
+                    log(f"✖ Falló ({titulo_previo}): {msg_error[:75]}")
+                finally:
+                    with ui_lock:
+                        completadas += 1
+                        c_snap, e_snap, f_snap = completadas, exitosas, fallidas
+                    def _prog():
+                        progress_bar.value = c_snap / total
+                        status_text.value = f"Progreso: {c_snap}/{total} (✔ {e_snap} | ✖ {f_snap})"
+                    ui_sync(_prog)
 
-        escanear_canciones()
-        with ui_lock:
-            status_text.value = f"¡Finalizado! ✔ {exitosas} descargadas | ✖ {fallidas} fallidas"
-            btn_descargar.disabled = False
+            with ThreadPoolExecutor(max_workers=max_hilos) as executor:
+                futures = [executor.submit(descargar_una, item) for item in urls_videos]
+                for f in futures:
+                    try:
+                        f.result()
+                    except BaseException:
+                        pass
+
+            def _fin_total():
+                escanear_canciones()
+                status_text.value = f"¡Finalizado! ✔ {exitosas} descargadas | ✖ {fallidas} fallidas"
+                btn_descargar.disabled = False
+            ui_sync(_fin_total)
+        finally:
+            descarga_en_curso = False
+
+    def iniciar_descarga_desde_busqueda(url_destino, hilos):
+        url_input.value = url_destino
+        tabs.selected_index = 2
+        page.update()
+        threading.Thread(target=descargar_playlist, args=(url_destino, hilos), daemon=True).start()
+
+    def iniciar_click(e):
+        url = url_input.value.strip()
+        if not url:
+            status_text.value = "Por favor, introduce un enlace válido."
+            page.update()
+            return
+        max_hilos = os.cpu_count() or 4
+        threading.Thread(target=descargar_playlist, args=(url, max_hilos), daemon=True).start()
+
+    btn_descargar = ft.Button("Descargar Todo", icon=ft.Icons.DOWNLOAD, on_click=iniciar_click)
+
             page.update()
 
 
@@ -1024,102 +1092,8 @@ def main(page: ft.Page):
         if not query:
             return
         status_busqueda.value = "Buscando en YouTube..."
-        lista_resultados_yt.controls.clear()
+        lista_resultados_yt.controls = []
         page.update()
-
-        def buscar_en_web_yt(texto_busqueda):
-            import json
-            import re
-
-            yt_host = "https://youtube.com"
-            params = urllib.parse.urlencode({"search_query": texto_busqueda})
-            url_busqueda = yt_host + "/results?" + params
-            req = urllib.request.Request(
-                url_busqueda,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-                    "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+667",
-                },
-            )
-            html = urllib.request.urlopen(req, timeout=8).read().decode("utf-8", errors="ignore")
-            items = []
-
-            match = re.search(r"var ytInitialData\s*=\s*(\{.*?\});\s*</script>", html, re.DOTALL)
-            if match:
-                data = json.loads(match.group(1))
-                sections = (
-                    data.get("contents", {})
-                    .get("twoColumnSearchResultsRenderer", {})
-                    .get("primaryContents", {})
-                    .get("sectionListRenderer", {})
-                    .get("contents", [])
-                )
-                for sec in sections:
-                    for item in sec.get("itemSectionRenderer", {}).get("contents", []):
-                        vr = item.get("videoRenderer")
-                        if not vr or not vr.get("videoId"):
-                            continue
-                        titulo_runs = vr.get("title", {}).get("runs", [])
-                        canal_runs = vr.get("ownerText", {}).get("runs", [])
-                        dur_txt = vr.get("lengthText", {}).get("simpleText", "")
-                        items.append({
-                            "id": vr["videoId"],
-                            "title": titulo_runs[0]["text"] if titulo_runs else "Sin título",
-                            "channel": canal_runs[0]["text"] if canal_runs else "",
-                            "duration_text": dur_txt,
-                        })
-                        if len(items) >= 15:
-                            break
-                    if len(items) >= 15:
-                        break
-
-            if not items:
-                api_url = yt_host + "/youtubei/v1/search?prettyPrint=false"
-                payload = json.dumps({
-                    "context": {
-                        "client": {
-                            "clientName": "WEB",
-                            "clientVersion": "2.20240501.01.00",
-                            "hl": "es",
-                            "gl": "ES",
-                        }
-                    },
-                    "query": texto_busqueda,
-                }).encode("utf-8")
-                req_api = urllib.request.Request(
-                    api_url,
-                    data=payload,
-                    headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
-                )
-                resp_json = json.loads(urllib.request.urlopen(req_api, timeout=8).read().decode("utf-8"))
-                sections = (
-                    resp_json.get("contents", {})
-                    .get("twoColumnSearchResultsRenderer", {})
-                    .get("primaryContents", {})
-                    .get("sectionListRenderer", {})
-                    .get("contents", [])
-                )
-                for sec in sections:
-                    for item in sec.get("itemSectionRenderer", {}).get("contents", []):
-                        vr = item.get("videoRenderer")
-                        if not vr or not vr.get("videoId"):
-                            continue
-                        titulo_runs = vr.get("title", {}).get("runs", [])
-                        canal_runs = vr.get("ownerText", {}).get("runs", [])
-                        dur_txt = vr.get("lengthText", {}).get("simpleText", "")
-                        items.append({
-                            "id": vr["videoId"],
-                            "title": titulo_runs[0]["text"] if titulo_runs else "Sin título",
-                            "channel": canal_runs[0]["text"] if canal_runs else "",
-                            "duration_text": dur_txt,
-                        })
-                        if len(items) >= 15:
-                            break
-                    if len(items) >= 15:
-                        break
-
-            return items
 
         def tarea_busqueda():
             yt_watch_base = "".join(["https://", "www.", "youtube.com", "/watch?v="])
@@ -1137,13 +1111,12 @@ def main(page: ft.Page):
             entries = []
             try:
                 with yt_dlp.YoutubeDL(ydl_search_opts) as ydl:
-                    # Pedimos 35 para garantizar mínimo 30 resultados válidos entre vídeos y playlists
                     res = ydl.extract_info(f"ytsearch35:{query}", download=False)
                     entries = [e for e in ((res or {}).get("entries") or []) if e]
             except Exception as err:
-                with ui_lock:
+                def _err_busq():
                     status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
-                    page.update()
+                ui_sync(_err_busq)
                 return
 
             nuevos_controles = []
@@ -1171,36 +1144,22 @@ def main(page: ft.Page):
                     )
                     subtitulo = f"📑 LISTA • {canal}" if canal else "📑 LISTA DE REPRODUCCIÓN"
 
-                    if thumb_url:
-                        portada = ft.Container(
-                            width=76,
-                            height=44,
-                            border_radius=6,
-                            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                            bgcolor=ft.Colors.GREY_900,
-                            content=ft.Stack([
-                                ft.Image(
-                                    src=thumb_url,
-                                    width=76,
-                                    height=44,
-                                    fit=ft.BoxFit.COVER,
-                                ),
-                                ft.Container(
-                                    alignment=ft.Alignment.CENTER,
-                                    bgcolor=ft.Colors.BLACK_45,
-                                    content=ft.Icon(ft.Icons.PLAYLIST_PLAY, color=ft.Colors.AMBER, size=24),
-                                ),
-                            ]),
-                        )
-                    else:
-                        portada = ft.Container(
-                            width=76,
-                            height=44,
-                            border_radius=6,
-                            bgcolor=ft.Colors.GREY_800,
-                            alignment=ft.Alignment.CENTER,
-                            content=ft.Icon(ft.Icons.PLAYLIST_PLAY, color=ft.Colors.AMBER, size=24),
-                        )
+                    portada = ft.Container(
+                        width=76,
+                        height=44,
+                        border_radius=6,
+                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                        bgcolor=ft.Colors.GREY_800,
+                        alignment=ft.Alignment.CENTER,
+                        content=ft.Stack([
+                            ft.Image(src=thumb_url, width=76, height=44, fit=ft.BoxFit.COVER),
+                            ft.Container(
+                                alignment=ft.Alignment.CENTER,
+                                bgcolor=ft.Colors.BLACK_45,
+                                content=ft.Icon(ft.Icons.PLAYLIST_PLAY, color=ft.Colors.AMBER, size=24),
+                            ),
+                        ]) if thumb_url else ft.Icon(ft.Icons.PLAYLIST_PLAY, color=ft.Colors.AMBER, size=24),
+                    )
 
                     nuevos_controles.append(
                         ft.ListTile(
@@ -1209,11 +1168,11 @@ def main(page: ft.Page):
                             leading=portada,
                             title=ft.Text(titulo, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                             subtitle=ft.Text(subtitulo, size=11, color=ft.Colors.AMBER_200),
-                            on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 4),
+                            on_click=lambda _, u=v_url: iniciar_descarga_desde_busqueda(u, os.cpu_count() or 4),
                             trailing=ft.IconButton(
                                 icon=ft.Icons.DOWNLOAD,
                                 tooltip="Descargar playlist completa",
-                                on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 4),
+                                on_click=lambda _, u=v_url: iniciar_descarga_desde_busqueda(u, os.cpu_count() or 4),
                             ),
                         )
                     )
@@ -1223,36 +1182,22 @@ def main(page: ft.Page):
                     dur = item.get("duration")
                     dur_str = f"{int(dur // 60)}:{int(dur % 60):02d}" if dur else ""
 
-                    if thumb_url:
-                        portada = ft.Container(
-                            width=76,
-                            height=44,
-                            border_radius=6,
-                            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                            bgcolor=ft.Colors.GREY_900,
-                            content=ft.Stack([
-                                ft.Image(
-                                    src=thumb_url,
-                                    width=76,
-                                    height=44,
-                                    fit=ft.BoxFit.COVER,
-                                ),
-                                ft.Container(
-                                    alignment=ft.Alignment.CENTER,
-                                    bgcolor=ft.Colors.BLACK_26,
-                                    content=ft.Icon(ft.Icons.PLAY_ARROW, color=ft.Colors.WHITE, size=20),
-                                ),
-                            ]),
-                        )
-                    else:
-                        portada = ft.Container(
-                            width=76,
-                            height=44,
-                            border_radius=6,
-                            bgcolor=ft.Colors.GREY_800,
-                            alignment=ft.Alignment.CENTER,
-                            content=ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
-                        )
+                    portada = ft.Container(
+                        width=76,
+                        height=44,
+                        border_radius=6,
+                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                        bgcolor=ft.Colors.GREY_800,
+                        alignment=ft.Alignment.CENTER,
+                        content=ft.Stack([
+                            ft.Image(src=thumb_url, width=76, height=44, fit=ft.BoxFit.COVER),
+                            ft.Container(
+                                alignment=ft.Alignment.CENTER,
+                                bgcolor=ft.Colors.BLACK_26,
+                                content=ft.Icon(ft.Icons.PLAY_ARROW, color=ft.Colors.WHITE, size=20),
+                            ),
+                        ]) if thumb_url else ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
+                    )
 
                     nuevos_controles.append(
                         ft.ListTile(
@@ -1265,17 +1210,18 @@ def main(page: ft.Page):
                             trailing=ft.IconButton(
                                 icon=ft.Icons.DOWNLOAD,
                                 tooltip="Descargar audio",
-                                on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 1),
+                                on_click=lambda _, u=v_url: iniciar_descarga_desde_busqueda(u, 1),
                             ),
                         )
                     )
 
-            with ui_lock:
+            def _pintar_resultados():
                 lista_resultados_yt.controls = nuevos_controles
                 status_busqueda.value = f"{len(nuevos_controles)} resultados encontrados"
-                page.update()
+            ui_sync(_pintar_resultados)
 
         page.run_thread(tarea_busqueda)
+
 
 
 
