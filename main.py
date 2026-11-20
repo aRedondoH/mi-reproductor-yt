@@ -626,8 +626,14 @@ def main(page: ft.Page):
 
     def log(mensaje):
         with ui_lock:
-            log_column.controls.append(ft.Text(mensaje, size=12))
-            page.update()
+            log_view.controls.append(ft.Text(mensaje, size=12, selectable=True))
+            if len(log_view.controls) > 150:
+                del log_view.controls[:len(log_view.controls) - 150]
+            try:
+                page.update()
+            except Exception:
+                pass
+
             
     def incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre):
         os.makedirs(carpeta_caratulas, exist_ok=True)
@@ -677,15 +683,17 @@ def main(page: ft.Page):
     def descargar_playlist(url, max_hilos):
         os.makedirs(ruta_actual, exist_ok=True)
 
-        status_text.value = "Extrayendo canciones de la lista..."
-        progress_bar.visible = True
-        progress_bar.value = None
-        page.update()
+        with ui_lock:
+            status_text.value = "Extrayendo canciones de la lista..."
+            progress_bar.visible = True
+            progress_bar.value = None
+            page.update()
 
         ydl_extract_opts = {
-            'extract_flat': True,
+            'extract_flat': 'in_playlist',
             'quiet': True,
             'ignoreerrors': True,
+            'no_warnings': True,
             'nocheckcertificate': True,
         }
 
@@ -697,92 +705,112 @@ def main(page: ft.Page):
                     for entry in info['entries']:
                         if not entry:
                             continue
-                        v_url = entry.get('url') or (
-                            "".join(["https://", "www.", "youtube.com", "/watch?v=", entry['id']])
-                            if entry.get('id') else None
-                        )
-
+                        vid_id = entry.get('id')
+                        v_url = entry.get('url')
+                        if v_url and not v_url.startswith("http"):
+                            v_url = "".join(["https://", "www.", "youtube.com", "/watch?v=", v_url])
+                        elif not v_url and vid_id:
+                            v_url = "".join(["https://", "www.", "youtube.com", "/watch?v=", vid_id])
                         if v_url:
-                            urls_videos.append(v_url)
+                            urls_videos.append((v_url, entry.get('title') or vid_id or "Vídeo"))
                 elif info:
-                    urls_videos = [url]
+                    urls_videos = [(url, info.get('title') or "Vídeo")]
         except Exception as e:
-            status_text.value = f"Error al leer lista: {str(e)}"
-            btn_descargar.disabled = False
-            progress_bar.visible = False
-            page.update()
+            with ui_lock:
+                status_text.value = f"Error al leer lista: {str(e)}"
+                btn_descargar.disabled = False
+                progress_bar.visible = False
+                page.update()
             return
 
         total = len(urls_videos)
         if total == 0:
-            status_text.value = "No se encontraron videos."
-            btn_descargar.disabled = False
-            progress_bar.visible = False
-            page.update()
+            with ui_lock:
+                status_text.value = "No se encontraron videos."
+                btn_descargar.disabled = False
+                progress_bar.visible = False
+                page.update()
             return
 
         completadas = 0
-        progress_bar.value = 0
-        status_text.value = f"Descargando 0 de {total} canciones ({max_hilos} hilos)..."
-        page.update()
+        exitosas = 0
+        fallidas = 0
 
-        def descargar_una(video_url):
-            nonlocal completadas
+        with ui_lock:
+            progress_bar.value = 0
+            status_text.value = f"Descargando 0 de {total} ({max_hilos} hilos)..."
+            page.update()
+
+        def descargar_una(item):
+            nonlocal completadas, exitosas, fallidas
+            video_url, titulo_previo = item
             carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
             os.makedirs(carpeta_caratulas, exist_ok=True)
+
             ydl_opts = {
-                'format': 'bestaudio[ext=m4a]/bestaudio',
+                'format': 'bestaudio[ext=m4a]/bestaudio/best',
                 'outtmpl': {
                     'default': f'{ruta_actual}/%(title)s.%(ext)s',
                     'thumbnail': f'{carpeta_caratulas}/%(title)s.%(ext)s',
                 },
                 'writethumbnail': True,
                 'ignoreerrors': False,
+                'abort_on_error': False,
                 'quiet': True,
                 'no_warnings': True,
                 'nocheckcertificate': True,
                 'retries': 3,
+                'fragment_retries': 3,
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
             }
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info_video = ydl.extract_info(video_url, download=True)
                     if not info_video:
-                        raise Exception("Vídeo no disponible.")
+                        raise RuntimeError("Vídeo privado, eliminado o no disponible")
                     ruta_archivo = ydl.prepare_filename(info_video)
                     if not os.path.exists(ruta_archivo):
-                        raise Exception("No se pudo guardar el archivo.")
+                        raise RuntimeError("No se generó el archivo descargado")
+                    titulo_real = info_video.get('title') or titulo_previo
                     base_nombre = os.path.splitext(os.path.basename(ruta_archivo))[0]
-                    incrustar_caratula_en_audio(ruta_archivo, info_video.get("thumbnail"), carpeta_caratulas, base_nombre)
-                    titulo = info_video.get('title', 'Canción')
-                    log(f"✔ {titulo}")
-            except Exception as e:
-                msg_error = str(e).replace("ERROR: ", "").strip()
-                log(f"✖ Omitido: {msg_error[:70]}")
+                    try:
+                        incrustar_caratula_en_audio(
+                            ruta_archivo, info_video.get("thumbnail"), carpeta_caratulas, base_nombre
+                        )
+                    except Exception:
+                        pass
+                    exitosas += 1
+                    log(f"✔ Descarga finalizada con éxito: {titulo_real}")
+            except BaseException as e:
+                fallidas += 1
+                msg_error = str(e).replace("ERROR: ", "").strip() or "Error desconocido"
+                log(f"✖ Falló ({titulo_previo}): {msg_error[:75]}")
             finally:
-                try:
-                    with ui_lock:
-                        completadas += 1
-                        progress_bar.value = completadas / total
-                        status_text.value = f"Progreso: {completadas} de {total} completadas"
+                with ui_lock:
+                    completadas += 1
+                    progress_bar.value = completadas / total
+                    status_text.value = (
+                        f"Progreso: {completadas}/{total} (✔ {exitosas} | ✖ {fallidas})"
+                    )
+                    try:
                         page.update()
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
 
         with ThreadPoolExecutor(max_workers=max_hilos) as executor:
-            futures = [executor.submit(descargar_una, u) for u in urls_videos]
+            futures = [executor.submit(descargar_una, item) for item in urls_videos]
             for f in futures:
                 try:
                     f.result()
-                except Exception:
+                except BaseException:
                     pass
 
         escanear_canciones()
-        status_text.value = f"¡Finalizado! Se procesaron {total} elementos."
-        btn_descargar.disabled = False
-        page.update()
-
-
+        with ui_lock:
+            status_text.value = f"¡Finalizado! ✔ {exitosas} descargadas | ✖ {fallidas} fallidas"
+            btn_descargar.disabled = False
+            page.update()
 
 
         
@@ -1094,81 +1122,161 @@ def main(page: ft.Page):
             return items
 
         def tarea_busqueda():
-            resultados = []
+            yt_watch_base = "".join(["https://", "www.", "youtube.com", "/watch?v="])
+            yt_playlist_base = "".join(["https://", "www.", "youtube.com", "/playlist?list="])
+            yt_img_base = "".join(["https://", "i.", "ytimg.com", "/vi/"])
+
+            ydl_search_opts = {
+                "extract_flat": True,
+                "quiet": True,
+                "no_warnings": True,
+                "ignoreerrors": True,
+                "nocheckcertificate": True,
+            }
+
+            entries = []
             try:
-                resultados = buscar_en_web_yt(query)
+                with yt_dlp.YoutubeDL(ydl_search_opts) as ydl:
+                    # Pedimos 35 para garantizar mínimo 30 resultados válidos entre vídeos y playlists
+                    res = ydl.extract_info(f"ytsearch35:{query}", download=False)
+                    entries = [e for e in ((res or {}).get("entries") or []) if e]
             except Exception as err:
-                status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
-                page.update()
+                with ui_lock:
+                    status_busqueda.value = f"Error de búsqueda: {str(err)[:65]}"
+                    page.update()
                 return
 
-#             yt_watch_base = "https://youtube.com" + "/watch?v="
-#             yt_img_base = "https://ytimg.com" + "/vi/"
-            yt_watch_base = "".join(["https://", "www.", "youtube.com", "/watch?v="])
-            yt_img_base = "".join(["https://", "i.", "ytimg.com", "/vi/"])
-            
+            nuevos_controles = []
+            for item in entries:
+                titulo = item.get("title") or "Sin título"
+                canal = item.get("uploader") or item.get("channel") or ""
+                vid_id = item.get("id") or ""
+                entry_url = item.get("url") or ""
+                ie_key = (item.get("ie_key") or "").lower()
 
+                es_playlist = (
+                    item.get("_type") == "playlist"
+                    or "playlist" in ie_key
+                    or "list=" in entry_url
+                    or vid_id.startswith(("PL", "OLAK", "RD", "UU"))
+                )
 
+                if es_playlist:
+                    v_url = entry_url if entry_url.startswith("http") else f"{yt_playlist_base}{vid_id}"
+                    thumbs = item.get("thumbnails") or []
+                    thumb_url = (
+                        thumbs[-1].get("url")
+                        if thumbs and isinstance(thumbs[-1], dict)
+                        else item.get("thumbnail")
+                    )
+                    subtitulo = f"📑 LISTA • {canal}" if canal else "📑 LISTA DE REPRODUCCIÓN"
 
-            lista_resultados_yt.controls.clear()
-            for item in resultados:
-                titulo = item.get("title", "Sin título")
-                canal = item.get("channel") or ""
-                dur_str = item.get("duration_text") or ""
-                vid_id = item.get("id")
-                v_url = f"{yt_watch_base}{vid_id}"
-                thumb_url = f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None
+                    if thumb_url:
+                        portada = ft.Container(
+                            width=76,
+                            height=44,
+                            border_radius=6,
+                            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                            bgcolor=ft.Colors.GREY_900,
+                            content=ft.Stack([
+                                ft.Image(
+                                    src=thumb_url,
+                                    width=76,
+                                    height=44,
+                                    fit=ft.BoxFit.COVER,
+                                ),
+                                ft.Container(
+                                    alignment=ft.Alignment.CENTER,
+                                    bgcolor=ft.Colors.BLACK_45,
+                                    content=ft.Icon(ft.Icons.PLAYLIST_PLAY, color=ft.Colors.AMBER, size=24),
+                                ),
+                            ]),
+                        )
+                    else:
+                        portada = ft.Container(
+                            width=76,
+                            height=44,
+                            border_radius=6,
+                            bgcolor=ft.Colors.GREY_800,
+                            alignment=ft.Alignment.CENTER,
+                            content=ft.Icon(ft.Icons.PLAYLIST_PLAY, color=ft.Colors.AMBER, size=24),
+                        )
 
-                if thumb_url:
-                    portada = ft.Container(
-                        width=76,
-                        height=44,
-                        border_radius=6,
-                        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                        bgcolor=ft.Colors.GREY_900,
-                        content=ft.Stack([
-                            ft.Image(
-                                src=thumb_url,
-                                width=76,
-                                height=44,
-                                fit=ft.BoxFit.COVER,
+                    nuevos_controles.append(
+                        ft.ListTile(
+                            dense=True,
+                            content_padding=ft.Padding.symmetric(horizontal=4, vertical=2),
+                            leading=portada,
+                            title=ft.Text(titulo, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            subtitle=ft.Text(subtitulo, size=11, color=ft.Colors.AMBER_200),
+                            on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 4),
+                            trailing=ft.IconButton(
+                                icon=ft.Icons.DOWNLOAD,
+                                tooltip="Descargar playlist completa",
+                                on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 4),
                             ),
-                            ft.Container(
-                                alignment=ft.Alignment.CENTER,
-                                bgcolor=ft.Colors.BLACK_26,
-                                content=ft.Icon(ft.Icons.PLAY_ARROW, color=ft.Colors.WHITE, size=20),
-                            ),
-                        ]),
+                        )
                     )
                 else:
-                    portada = ft.Container(
-                        width=76,
-                        height=44,
-                        border_radius=6,
-                        bgcolor=ft.Colors.GREY_800,
-                        alignment=ft.Alignment.CENTER,
-                        content=ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
+                    v_url = entry_url if entry_url.startswith("http") else f"{yt_watch_base}{vid_id}"
+                    thumb_url = f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else item.get("thumbnail")
+                    dur = item.get("duration")
+                    dur_str = f"{int(dur // 60)}:{int(dur % 60):02d}" if dur else ""
+
+                    if thumb_url:
+                        portada = ft.Container(
+                            width=76,
+                            height=44,
+                            border_radius=6,
+                            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                            bgcolor=ft.Colors.GREY_900,
+                            content=ft.Stack([
+                                ft.Image(
+                                    src=thumb_url,
+                                    width=76,
+                                    height=44,
+                                    fit=ft.BoxFit.COVER,
+                                ),
+                                ft.Container(
+                                    alignment=ft.Alignment.CENTER,
+                                    bgcolor=ft.Colors.BLACK_26,
+                                    content=ft.Icon(ft.Icons.PLAY_ARROW, color=ft.Colors.WHITE, size=20),
+                                ),
+                            ]),
+                        )
+                    else:
+                        portada = ft.Container(
+                            width=76,
+                            height=44,
+                            border_radius=6,
+                            bgcolor=ft.Colors.GREY_800,
+                            alignment=ft.Alignment.CENTER,
+                            content=ft.Icon(ft.Icons.PLAY_CIRCLE_FILL, color=ft.Colors.RED_400),
+                        )
+
+                    nuevos_controles.append(
+                        ft.ListTile(
+                            dense=True,
+                            content_padding=ft.Padding.symmetric(horizontal=4, vertical=2),
+                            leading=portada,
+                            title=ft.Text(titulo, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            subtitle=ft.Text(f"{canal} • {dur_str}".strip(" •"), size=11, color=ft.Colors.GREY_400),
+                            on_click=lambda _, u=v_url, t=titulo: page.run_task(reproducir_video_youtube, u, t),
+                            trailing=ft.IconButton(
+                                icon=ft.Icons.DOWNLOAD,
+                                tooltip="Descargar audio",
+                                on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 1),
+                            ),
+                        )
                     )
 
-                lista_resultados_yt.controls.append(
-                    ft.ListTile(
-                        dense=True,
-                        content_padding=ft.Padding.symmetric(horizontal=4, vertical=2),
-                        leading=portada,
-                        title=ft.Text(titulo, size=13, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                        subtitle=ft.Text(f"{canal} • {dur_str}".strip(" •"), size=11, color=ft.Colors.GREY_400),
-                        on_click=lambda _, u=v_url, t=titulo: page.run_task(reproducir_video_youtube, u, t),
-                        trailing=ft.IconButton(
-                            icon=ft.Icons.DOWNLOAD,
-                            tooltip="Descargar audio",
-                            on_click=lambda _, u=v_url: page.run_thread(descargar_playlist, u, 1),
-                        ),
-                    )
-                )
-            status_busqueda.value = f"{len(resultados)} resultados encontrados"
-            page.update()
+            with ui_lock:
+                lista_resultados_yt.controls = nuevos_controles
+                status_busqueda.value = f"{len(nuevos_controles)} resultados encontrados"
+                page.update()
 
         page.run_thread(tarea_busqueda)
+
 
 
 
