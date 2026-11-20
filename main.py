@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Fri Nov 20 17:55:34 2026
+
+@author: Arh
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Fri Nov 20 17:07:35 2026
 
 @author: Arh
@@ -19,6 +26,8 @@ import urllib.parse
 import urllib.request
 import ssl
 import time
+import re
+import json
 
 try:
     import certifi
@@ -293,6 +302,7 @@ def main(page: ft.Page):
     reproduccion_lock = asyncio.Lock()
     token_reproduccion = 0
 
+    modo_video_yt = False
 
     async def reproducir_indice(idx):
         nonlocal indice_actual, cambiando_pista, ignorar_estados_hasta, titulo_stream_actual, token_reproduccion, esta_reproduciendo
@@ -310,6 +320,9 @@ def main(page: ft.Page):
         slider_progreso.value = 0
         slider_progreso.max = 100
 
+        if panel_lyrics_abierto:
+            cargar_lyrics_cancion_actual()
+
         if not app_en_segundo_plano:
             for pos in (anterior_idx, indice_actual):
                 if 0 <= pos < len(lista_canciones_ui.controls):
@@ -321,40 +334,34 @@ def main(page: ft.Page):
         async with reproduccion_lock:
             if mi_token != token_reproduccion:
                 return
-            if contenedor_video_mini.visible:
-                await cerrar_reproductor_video()
 
             cambiando_pista = True
             ignorar_estados_hasta = time.monotonic() + 1.2
+            ruta_completa = os.path.join(ruta_actual, nombre)
+
             try:
-                try:
+                if video_player:
+                    configurar_modo_visual_video(False)
+                    try:
+                        await video_player.pause()
+                    except Exception:
+                        pass
+                    video_player.playlist = [ftv.VideoMedia(resource=ruta_completa)]
+                    esta_reproduciendo = True
+                    btn_play_pause.icon = ft.Icons.PAUSE
+                    if not app_en_segundo_plano:
+                        page.update()
+                    await video_player.play()
+                else:
                     await audio_player.stop()
-                except Exception:
-                    pass
-                try:
-                    await audio_player.release()
-                except Exception:
-                    pass
-
-                await asyncio.sleep(0.06)
-                if mi_token != token_reproduccion:
-                    return
-
-                audio_player.src = os.path.join(ruta_actual, nombre)
-                try:
+                    audio_player.src = ruta_completa
                     audio_player.update()
-                except Exception:
-                    page.update()
+                    await audio_player.play()
+                    esta_reproduciendo = True
+                    btn_play_pause.icon = ft.Icons.PAUSE
+                    if not app_en_segundo_plano:
+                        page.update()
 
-                await asyncio.sleep(0.12)
-                if mi_token != token_reproduccion:
-                    return
-
-                await audio_player.play()
-                esta_reproduciendo = True
-                btn_play_pause.icon = ft.Icons.PAUSE
-                if not app_en_segundo_plano:
-                    page.update()
                 await actualizar_notificacion_bloqueo()
             finally:
                 await asyncio.sleep(0.35)
@@ -362,11 +369,14 @@ def main(page: ft.Page):
                     cambiando_pista = False
                     ignorar_estados_hasta = time.monotonic() + 0.4
 
-
-
     async def toggle_play_pause(e):
         nonlocal esta_reproduciendo
-        if video_player and contenedor_video_mini.visible:
+        if not modo_video_yt and (indice_actual < 0 or indice_actual >= len(canciones_locales)):
+            if canciones_locales:
+                await reproducir_indice(0)
+            return
+
+        if video_player:
             if esta_reproduciendo:
                 await video_player.pause()
                 esta_reproduciendo = False
@@ -374,26 +384,18 @@ def main(page: ft.Page):
                 await video_player.play()
                 esta_reproduciendo = True
             btn_play_pause.icon = ft.Icons.PAUSE if esta_reproduciendo else ft.Icons.PLAY_ARROW
-            try:
+            if not app_en_segundo_plano:
                 page.update()
-            except Exception:
-                pass
             await actualizar_notificacion_bloqueo()
-            return
-
-        if indice_actual < 0 or indice_actual >= len(canciones_locales):
-            if canciones_locales:
-                await reproducir_indice(0)
-            return
-
-        if esta_reproduciendo:
-            await audio_player.pause()
         else:
-            await audio_player.play()
+            if esta_reproduciendo:
+                await audio_player.pause()
+            else:
+                await audio_player.play()
 
     async def siguiente_cancion(e):
         nonlocal indice_video_yt
-        if contenedor_video_mini.visible and videos_yt_actuales:
+        if modo_video_yt and videos_yt_actuales:
             siguiente_idx = (indice_video_yt + 1) % len(videos_yt_actuales)
             indice_video_yt = siguiente_idx
             v_url, titulo = videos_yt_actuales[indice_video_yt]
@@ -406,7 +408,7 @@ def main(page: ft.Page):
 
     async def anterior_cancion(e):
         nonlocal indice_video_yt
-        if contenedor_video_mini.visible and videos_yt_actuales:
+        if modo_video_yt and videos_yt_actuales:
             anterior_idx = (indice_video_yt - 1) % len(videos_yt_actuales)
             indice_video_yt = anterior_idx
             v_url, titulo = videos_yt_actuales[indice_video_yt]
@@ -419,16 +421,132 @@ def main(page: ft.Page):
 
 
 
+
     def on_slider_start(e):
         nonlocal arrastrando_slider
         arrastrando_slider = True
 
  
-    
     async def on_slider_end(e):
         nonlocal arrastrando_slider
         arrastrando_slider = False
-        await audio_player.seek(ft.Duration(milliseconds=int(e.control.value)))
+        destino = ft.Duration(milliseconds=int(e.control.value))
+        if video_player:
+            await video_player.seek(destino)
+        else:
+            await audio_player.seek(destino)
+
+
+    lyrics_buscadas = set()
+    descargando_lyrics = False
+    lineas_lrc_actuales = []   # Lista de tuplas (ms, texto)
+    indice_linea_lrc = -1
+    panel_lyrics_abierto = False
+
+    def obtener_ruta_lyrics(nombre_archivo):
+        base = os.path.splitext(nombre_archivo)[0]
+        carpeta_lyrics = os.path.join(ruta_actual, ".lyrics")
+        for carpeta in (carpeta_lyrics, ruta_actual):
+            for ext in (".lrc", ".txt"):
+                ruta_lyr = os.path.join(carpeta, base + ext)
+                if os.path.isfile(ruta_lyr):
+                    return ruta_lyr
+        return None
+
+    def parsear_lrc(contenido):
+        patron = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\](.*)")
+        resultado = []
+        for linea in contenido.splitlines():
+            m = patron.match(linea.strip())
+            if m:
+                mins = int(m.group(1))
+                segs = float(m.group(2))
+                texto = m.group(3).strip()
+                ms = int((mins * 60 + segs) * 1000)
+                if texto:
+                    resultado.append((ms, texto))
+        resultado.sort(key=lambda x: x[0])
+        return resultado
+
+    def _buscar_lyrics_online(titulo_busqueda):
+        limpio = re.sub(r"\(.*?\)|\[.*?\]|official\s*(music\s*)?video|audio|lyrics|letra", "", titulo_busqueda, flags=re.IGNORECASE).strip()
+        for consulta in dict.fromkeys([limpio, titulo_busqueda]):
+            if not consulta:
+                continue
+            try:
+                q = urllib.parse.quote(consulta)
+                host = "lrclib.net"
+                endpoint = "/api/search?q=" + q
+                url_api = "https://" + host + endpoint
+                req = urllib.request.Request(url_api, headers={"User-Agent": "DescargadorParalelo/1.0"})
+                ctx = ssl._create_unverified_context()
+                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                    datos = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                if isinstance(datos, list) and datos:
+                    for item in datos:
+                        if item.get("syncedLyrics"):
+                            return item["syncedLyrics"], ".lrc"
+                    for item in datos:
+                        if item.get("plainLyrics"):
+                            return item["plainLyrics"], ".txt"
+            except Exception:
+                continue
+        return None, None
+
+
+    def descargar_lyrics_faltantes():
+        nonlocal descargando_lyrics
+        if descargando_lyrics:
+            return
+        descargando_lyrics = True
+
+        def _ini():
+            btn_lyrics.disabled = True
+            status_text.value = "Buscando letras (lyrics)..."
+        ui_sync(_ini)
+
+        try:
+            carpeta_snap = ruta_actual
+            carpeta_lyrics = os.path.join(carpeta_snap, ".lyrics")
+            os.makedirs(carpeta_lyrics, exist_ok=True)
+            pendientes = [
+                f for f in list(canciones_locales)
+                if (carpeta_snap, f) not in lyrics_buscadas and obtener_ruta_lyrics(f) is None
+            ]
+            if not pendientes:
+                ui_sync(lambda: setattr(status_text, "value", "Letras al día"))
+                return
+
+            encontradas = 0
+            total = len(pendientes)
+            for idx, archivo in enumerate(pendientes):
+                if ruta_actual != carpeta_snap:
+                    return
+                lyrics_buscadas.add((carpeta_snap, archivo))
+                base_nombre = os.path.splitext(archivo)[0]
+                ui_sync(lambda i=idx: setattr(status_text, "value", f"Letra {i + 1}/{total}..."))
+
+                contenido, ext = _buscar_lyrics_online(base_nombre)
+                if contenido:
+                    with open(os.path.join(carpeta_lyrics, base_nombre + ext), "w", encoding="utf-8") as f:
+                        f.write(contenido)
+                    encontradas += 1
+
+            ui_sync(lambda: setattr(status_text, "value", f"Letras encontradas: {encontradas}"))
+            if panel_lyrics_abierto:
+                ui_sync(cargar_lyrics_cancion_actual)
+        finally:
+            descargando_lyrics = False
+            ui_sync(lambda: setattr(btn_lyrics, "disabled", False))
+
+    def iniciar_descarga_lyrics(e=None):
+        for k in [k for k in lyrics_buscadas if k[0] == ruta_actual]:
+            lyrics_buscadas.discard(k)
+        page.run_thread(descargar_lyrics_faltantes)
+
+
+
+    
     
 
     btn_play_pause.on_click = lambda e: page.run_task(toggle_play_pause, e)
@@ -950,6 +1068,7 @@ def main(page: ft.Page):
 
     # escanear_canciones()  # <-- AÑADIR ANTES DE page.add
     btn_caratulas = ft.Button("Carátulas", icon=ft.Icons.IMAGE_SEARCH, on_click=iniciar_descarga_caratulas)
+    btn_lyrics = ft.Button("Lyrics", icon=ft.Icons.LYRICS, on_click=iniciar_descarga_lyrics)
 
     vista_biblioteca = ft.Container(
         padding=ft.Padding.symmetric(horizontal=12, vertical=8),
@@ -958,8 +1077,9 @@ def main(page: ft.Page):
             ft.Row([
                 ft.Button("Elegir carpeta", icon=ft.Icons.FOLDER_OPEN, on_click=lambda _: page.run_task(abrir_selector_carpeta)),
                 btn_caratulas,
+                btn_lyrics,
                 ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Actualizar", on_click=escanear_canciones),
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
             ft.Row([ft.Icon(ft.Icons.FOLDER, size=14, color=ft.Colors.GREY_400), lbl_ruta_actual]),
             ft.Divider(height=1),
             lista_canciones_ui
@@ -988,57 +1108,101 @@ def main(page: ft.Page):
     status_busqueda = ft.Text("Escribe algo para buscar", size=12, color=ft.Colors.GREY_400)
     lista_resultados_yt = ft.ListView(expand=True, spacing=6)
 
+    async def on_video_position_change(e):
+        pos_ms = e.data.in_milliseconds if hasattr(e.data, "in_milliseconds") else int(e.data or 0)
+        if not arrastrando_slider and slider_progreso.max > 0:
+            slider_progreso.value = min(pos_ms, slider_progreso.max)
+            lbl_tiempo.value = f"{formatear_tiempo(pos_ms)} / {formatear_tiempo(slider_progreso.max)}"
+            if panel_lyrics_abierto and lineas_lrc_actuales:
+                actualizar_resaltado_lyrics(pos_ms)
+            if not app_en_segundo_plano:
+                page.update()
+
+    async def on_video_duration_change(e):
+        dur_ms = e.data.in_milliseconds if hasattr(e.data, "in_milliseconds") else int(e.data or 0)
+        if dur_ms > 0:
+            slider_progreso.max = dur_ms
+            lbl_tiempo.value = f"{formatear_tiempo(slider_progreso.value)} / {formatear_tiempo(dur_ms)}"
+            if not app_en_segundo_plano:
+                page.update()
+
+    async def on_video_complete(e):
+        nonlocal esta_reproduciendo
+        if cambiando_pista or time.monotonic() < ignorar_estados_hasta:
+            return
+        esta_reproduciendo = False
+        await siguiente_cancion(None)
+
     video_player = ftv.Video(
         playlist=[],
         aspect_ratio=16 / 9,
         autoplay=True,
         expand=True,
         fill_color=ft.Colors.BLACK,
+        on_position_change=on_video_position_change,
+        on_duration_change=on_video_duration_change,
+        on_complete=on_video_complete,
     ) if ftv else None
 
     lbl_video_mini = ft.Text("", size=12, weight=ft.FontWeight.BOLD, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True)
+    fila_cabecera_video = ft.Row([
+        lbl_video_mini,
+        ft.IconButton(
+            icon=ft.Icons.CLOSE,
+            icon_size=18,
+            tooltip="Cerrar vídeo",
+            on_click=lambda e: page.run_task(cerrar_reproductor_video, e),
+        ),
+    ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER, visible=False)
+
+    box_video_surface = ft.Container(
+        height=1,
+        width=1,
+        opacity=0,
+        border_radius=6,
+        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        content=video_player if video_player else ft.Container(),
+    )
+
+    contenedor_video_mini = ft.Container(
+        visible=bool(video_player),
+        bgcolor=ft.Colors.TRANSPARENT,
+        border_radius=8,
+        padding=0,
+        content=ft.Column([fila_cabecera_video, box_video_surface], spacing=4),
+    )
+
+    def configurar_modo_visual_video(mostrar_video):
+        nonlocal modo_video_yt
+        modo_video_yt = mostrar_video
+        fila_cabecera_video.visible = mostrar_video
+        if mostrar_video:
+            contenedor_video_mini.bgcolor = ft.Colors.BLACK
+            contenedor_video_mini.padding = 6
+            contenedor_video_mini.border = ft.Border.all(1, ft.Colors.GREY_800)
+            box_video_surface.height = 180
+            box_video_surface.width = None
+            box_video_surface.opacity = 1
+        else:
+            contenedor_video_mini.bgcolor = ft.Colors.TRANSPARENT
+            contenedor_video_mini.padding = 0
+            contenedor_video_mini.border = None
+            box_video_surface.height = 1
+            box_video_surface.width = 1
+            box_video_surface.opacity = 0
 
     async def cerrar_reproductor_video(e=None):
-        if video_player and contenedor_video_mini.visible:
+        nonlocal esta_reproduciendo
+        if video_player and modo_video_yt:
             try:
                 await video_player.pause()
                 video_player.playlist = []
             except Exception:
                 pass
-        if contenedor_video_mini.visible:
-            contenedor_video_mini.visible = False
-            page.update()
-
-
-    contenedor_video_mini = ft.Container(
-        visible=False,
-        bgcolor=ft.Colors.BLACK,
-        border_radius=8,
-        padding=6,
-        border=ft.Border.all(1, ft.Colors.GREY_800),
-        content=ft.Column([
-            ft.Row([
-                lbl_video_mini,
-                ft.IconButton(
-                    icon=ft.Icons.CLOSE,
-                    icon_size=18,
-                    tooltip="Cerrar vídeo",
-                    on_click=lambda e: page.run_task(cerrar_reproductor_video, e),
-                ),
-            ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Container(
-                height=180,
-                border_radius=6,
-                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                content=video_player if video_player else ft.Text(
-                    "Instala 'flet-video' para ver el vídeo aquí.",
-                    size=12,
-                    color=ft.Colors.GREY_400,
-                ),
-            ),
-        ], spacing=4),
-    )
-
+            esta_reproduciendo = False
+            btn_play_pause.icon = ft.Icons.PLAY_ARROW
+        configurar_modo_visual_video(False)
+        page.update()
 
     async def reproducir_video_youtube(video_url, titulo, idx_lista=None):
         nonlocal indice_actual, esta_reproduciendo, indice_video_yt
@@ -1049,8 +1213,8 @@ def main(page: ft.Page):
         lbl_video_mini.value = titulo
         slider_progreso.value = 0
         slider_progreso.max = 100
-        if esta_reproduciendo:
-            await audio_player.pause()
+        if panel_lyrics_abierto:
+            cargar_lyrics_cancion_actual(titulo_custom=titulo)
         page.update()
 
         def extraer_stream():
@@ -1074,9 +1238,7 @@ def main(page: ft.Page):
                     validos = [
                         f for f in info["formats"]
                         if f.get("url") and f.get("vcodec") != "none" and f.get("acodec") != "none"
-                    ]
-                    if not validos:
-                        validos = [f for f in info["formats"] if f.get("url")]
+                    ] or [f for f in info["formats"] if f.get("url")]
                     if validos:
                         url_directa = validos[-1]["url"]
                         headers = validos[-1].get("http_headers") or headers
@@ -1094,9 +1256,8 @@ def main(page: ft.Page):
             lbl_video_mini.value = titulo_real
 
             if video_player:
-                if contenedor_video_mini.visible:
-                    await video_player.pause()
-                contenedor_video_mini.visible = True
+                await video_player.pause()
+                configurar_modo_visual_video(True)
                 video_player.playlist = [ftv.VideoMedia(resource=stream_url, http_headers=headers)]
                 esta_reproduciendo = True
                 btn_play_pause.icon = ft.Icons.PAUSE
@@ -1108,7 +1269,6 @@ def main(page: ft.Page):
                 await audio_player.play()
 
             await actualizar_notificacion_bloqueo(titulo_custom=titulo_real)
-
         except Exception as err:
             lbl_cancion_actual.value = "Error al reproducir vídeo"
             status_busqueda.value = f"Error: {str(err)[:65]}"
@@ -1118,7 +1278,7 @@ def main(page: ft.Page):
         nonlocal app_en_segundo_plano
         if e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE, ft.AppLifecycleState.INACTIVE):
             app_en_segundo_plano = True
-            if video_player and contenedor_video_mini.visible and esta_reproduciendo:
+            if video_player and esta_reproduciendo:
                 await asyncio.sleep(0.2)
                 try:
                     await video_player.play()
@@ -1132,6 +1292,8 @@ def main(page: ft.Page):
                 pass
 
     page.on_app_lifecycle_state_change = on_lifecycle_change
+
+
 
     def buscar_youtube_click(e=None):
         query = busqueda_input.value.strip()
@@ -1313,7 +1475,6 @@ def main(page: ft.Page):
                 busqueda_input,
                 ft.IconButton(icon=ft.Icons.SEARCH, on_click=buscar_youtube_click),
             ]),
-            contenedor_video_mini,
             status_busqueda,
             ft.Divider(height=1),
             lista_resultados_yt,
@@ -1349,21 +1510,146 @@ def main(page: ft.Page):
 
 
 
+    lista_lyrics_ui = ft.ListView(expand=True, spacing=6, auto_scroll=False)
+
+    def actualizar_resaltado_lyrics(pos_ms):
+        nonlocal indice_linea_lrc
+        if not lineas_lrc_actuales:
+            return
+        nuevo_idx = -1
+        for i, (ms, _) in enumerate(lineas_lrc_actuales):
+            if pos_ms >= ms:
+                nuevo_idx = i
+            else:
+                break
+        if nuevo_idx != indice_linea_lrc and 0 <= nuevo_idx < len(lista_lyrics_ui.controls):
+            if 0 <= indice_linea_lrc < len(lista_lyrics_ui.controls):
+                prev_txt = lista_lyrics_ui.controls[indice_linea_lrc]
+                prev_txt.color = ft.Colors.GREY_400
+                prev_txt.weight = None
+                prev_txt.size = 13
+            curr_txt = lista_lyrics_ui.controls[nuevo_idx]
+            curr_txt.color = ft.Colors.AMBER_300
+            curr_txt.weight = ft.FontWeight.BOLD
+            curr_txt.size = 15
+            indice_linea_lrc = nuevo_idx
+            try:
+                lista_lyrics_ui.scroll_to(key=f"lyr_{nuevo_idx}", duration=250)
+            except Exception:
+                pass
+
+    def cargar_lyrics_cancion_actual(titulo_custom=None):
+        nonlocal lineas_lrc_actuales, indice_linea_lrc
+        lineas_lrc_actuales = []
+        indice_linea_lrc = -1
+        lista_lyrics_ui.controls.clear()
+
+        if 0 <= indice_actual < len(canciones_locales):
+            nombre_archivo = canciones_locales[indice_actual]
+            ruta_lyr = obtener_ruta_lyrics(nombre_archivo)
+            if ruta_lyr:
+                with open(ruta_lyr, "r", encoding="utf-8", errors="ignore") as f:
+                    contenido = f.read()
+                if ruta_lyr.endswith(".lrc"):
+                    lineas_lrc_actuales = parsear_lrc(contenido)
+                if lineas_lrc_actuales:
+                    for i, (_, texto) in enumerate(lineas_lrc_actuales):
+                        lista_lyrics_ui.controls.append(
+                            ft.Text(texto, key=f"lyr_{i}", size=13, color=ft.Colors.GREY_400, text_align=ft.TextAlign.CENTER)
+                        )
+                else:
+                    for linea in contenido.splitlines():
+                        if linea.strip():
+                            lista_lyrics_ui.controls.append(
+                                ft.Text(linea.strip(), size=13, color=ft.Colors.GREY_200, text_align=ft.TextAlign.CENTER)
+                            )
+                page.update()
+                return
+
+        titulo_buscar = titulo_custom or titulo_stream_actual or lbl_cancion_actual.value
+        if not titulo_buscar or titulo_buscar == "Ninguna canción":
+            lista_lyrics_ui.controls.append(ft.Text("Reproduce una canción para ver su letra.", size=12, color=ft.Colors.GREY_400))
+            page.update()
+            return
+
+        lista_lyrics_ui.controls.append(ft.Text("Buscando letra...", size=12, color=ft.Colors.GREY_400))
+        page.update()
+
+        def _fetch_individual():
+            contenido, ext = _buscar_lyrics_online(titulo_buscar)
+            if contenido and 0 <= indice_actual < len(canciones_locales):
+                carpeta_lyrics = os.path.join(ruta_actual, ".lyrics")
+                os.makedirs(carpeta_lyrics, exist_ok=True)
+                base_nombre = os.path.splitext(canciones_locales[indice_actual])[0]
+                with open(os.path.join(carpeta_lyrics, base_nombre + ext), "w", encoding="utf-8") as f:
+                    f.write(contenido)
+            def _pintar():
+                lista_lyrics_ui.controls.clear()
+                if not contenido:
+                    lista_lyrics_ui.controls.append(ft.Text("No se encontró letra para esta canción.", size=12, color=ft.Colors.GREY_400))
+                    return
+                if ext == ".lrc":
+                    nonlocal lineas_lrc_actuales
+                    lineas_lrc_actuales = parsear_lrc(contenido)
+                    for i, (_, texto) in enumerate(lineas_lrc_actuales):
+                        lista_lyrics_ui.controls.append(
+                            ft.Text(texto, key=f"lyr_{i}", size=13, color=ft.Colors.GREY_400, text_align=ft.TextAlign.CENTER)
+                        )
+                else:
+                    for linea in contenido.splitlines():
+                        if linea.strip():
+                            lista_lyrics_ui.controls.append(
+                                ft.Text(linea.strip(), size=13, color=ft.Colors.GREY_200, text_align=ft.TextAlign.CENTER)
+                            )
+            ui_sync(_pintar)
+
+        page.run_thread(_fetch_individual)
+
+    def toggle_panel_lyrics(e=None):
+        nonlocal panel_lyrics_abierto
+        panel_lyrics_abierto = not panel_lyrics_abierto
+        panel_lyrics.visible = panel_lyrics_abierto
+        btn_ver_lyrics.icon = ft.Icons.LYRICS if panel_lyrics_abierto else ft.Icons.LYRICS_OUTLINED
+        btn_ver_lyrics.icon_color = ft.Colors.AMBER_300 if panel_lyrics_abierto else None
+        if panel_lyrics_abierto:
+            cargar_lyrics_cancion_actual()
+        page.update()
+
+    panel_lyrics = ft.Container(
+        visible=False,
+        height=170,
+        padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+        margin=ft.Margin.only(bottom=6),
+        bgcolor=ft.Colors.BLACK_54,
+        border_radius=8,
+        border=ft.Border.all(1, ft.Colors.GREY_800),
+        content=lista_lyrics_ui,
+    )
+
+    btn_ver_lyrics = ft.IconButton(
+        icon=ft.Icons.LYRICS_OUTLINED,
+        icon_size=24,
+        tooltip="Ver lyrics",
+        on_click=toggle_panel_lyrics,
+    )
+
     barra_reproductor = ft.Container(
         padding=ft.Padding.only(left=14, right=14, top=8, bottom=10),
         bgcolor=ft.Colors.GREY_900,
         border=ft.Border.only(top=ft.BorderSide(1, ft.Colors.GREY_800)),
         content=ft.Column([
+            panel_lyrics,
             ft.Row([ft.Container(content=lbl_cancion_actual, expand=True), lbl_tiempo]),
             slider_progreso,
             ft.Row([
-                ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(anterior_cancion, e)),
-                btn_play_pause,
-                ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(siguiente_cancion, e)),
-                # ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=anterior_cancion),
-                # btn_play_pause,
-                # ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=siguiente_cancion),
-            ], alignment=ft.MainAxisAlignment.CENTER, spacing=20)
+                ft.Container(width=40),
+                ft.Row([
+                    ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(anterior_cancion, e)),
+                    btn_play_pause,
+                    ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(siguiente_cancion, e)),
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
+                btn_ver_lyrics,
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
         ], spacing=0)
     )
 
@@ -1389,9 +1675,10 @@ def main(page: ft.Page):
     page.add(
         ft.SafeArea(
             expand=True,
-            content=ft.Column([tabs, barra_reproductor], expand=True, spacing=0)
+            content=ft.Column([tabs, contenedor_video_mini, barra_reproductor], expand=True, spacing=0)
         )
     )
+
 
     page.run_task(inicializar_app)
 
