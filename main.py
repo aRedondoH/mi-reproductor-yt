@@ -1,16 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Nov 19 17:23:41 2026
+Created on Fri Nov 20 09:21:54 2026
 
 @author: Arh
 """
 
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Nov 18 09:25:24 2026
-
-@author: Arh
-"""
 
 import flet as ft
 import yt_dlp
@@ -50,103 +44,109 @@ def main(page: ft.Page):
     permisos = fph.PermissionHandler()
 
     
-    notif_lock = asyncio.Lock()
-    accion_en_curso = False
     ultima_caratula_cache = (None, None)
+    titulo_stream_actual = None
+    caratula_stream_actual = None
+    tarea_notif_pendiente = None
 
     async def manejar_accion_notificacion(e: ftn.NotificationActionEvent):
-        nonlocal accion_en_curso
-        if accion_en_curso:
-            return
-        accion_en_curso = True
-        try:
-            if e.action_id == "prev":
-                await anterior_cancion(None)
-            elif e.action_id == "play_pause":
-                await toggle_play_pause(None)
-            elif e.action_id == "next":
-                await siguiente_cancion(None)
-        finally:
-            await asyncio.sleep(0.25)
-            accion_en_curso = False
+        if e.action_id == "prev":
+            page.run_task(anterior_cancion, None)
+        elif e.action_id == "play_pause":
+            page.run_task(toggle_play_pause, None)
+        elif e.action_id == "next":
+            page.run_task(siguiente_cancion, None)
 
     notificaciones = ftn.Notifications(on_action=manejar_accion_notificacion)
     page.services.append(notificaciones) if hasattr(page, "services") else page.overlay.append(notificaciones)
 
-    async def actualizar_notificacion_bloqueo(titulo_custom=None, caratula_custom=None):
+    async def _enviar_notificacion_async(titulo, ruta_caratula, reproduciendo):
         nonlocal ultima_caratula_cache
-        if notif_lock.locked():
-            return
-        async with notif_lock:
-            if titulo_custom:
-                titulo = titulo_custom
-                ruta_caratula = caratula_custom
+        await asyncio.sleep(0.15)  # Evita colapsar Android si cambian estados rápido
+
+        texto_boton = "  ⏸  " if reproduciendo else "  ▶  "
+        large_icon = None
+
+        if ruta_caratula and os.path.isfile(ruta_caratula):
+            if ultima_caratula_cache[0] == ruta_caratula:
+                large_icon = ultima_caratula_cache[1]
             else:
-                if indice_actual < 0 or indice_actual >= len(canciones_locales):
-                    return
-                nombre_archivo = canciones_locales[indice_actual]
-                titulo = os.path.splitext(nombre_archivo)[0]
-                ruta_caratula = obtener_caratula(nombre_archivo)
+                try:
+                    loop = asyncio.get_running_loop()
+                    data = await loop.run_in_executor(None, lambda: open(ruta_caratula, "rb").read())
+                    large_icon = ftn.AndroidBytesBitmap(data=data)
+                    ultima_caratula_cache = (ruta_caratula, large_icon)
+                except Exception:
+                    large_icon = None
 
-            texto_boton = "⏸" if esta_reproduciendo else "▶"
-            large_icon = None
-            if ruta_caratula and os.path.isfile(ruta_caratula):
-                if ultima_caratula_cache[0] == ruta_caratula:
-                    large_icon = ultima_caratula_cache[1]
-                else:
-                    try:
-                        with open(ruta_caratula, "rb") as f:
-                            large_icon = ftn.AndroidBytesBitmap(data=f.read())
-                        ultima_caratula_cache = (ruta_caratula, large_icon)
-                    except Exception:
-                        large_icon = None
-
-            try:
-                await asyncio.wait_for(
-                    notificaciones.show(
-                        id=1001,
-                        title=titulo,
-                        body="Reproduciendo" if esta_reproduciendo else "En pausa",
-                        actions=[
-                            ftn.NotificationAction(
-                                id="prev",
-                                title="⏮",
-                                cancel_notification=False,
-                                foreground=False,
-                                require_authentication=False,
-                            ),
-                            ftn.NotificationAction(
-                                id="play_pause",
-                                title=texto_boton,
-                                cancel_notification=False,
-                                foreground=False,
-                                require_authentication=False,
-                            ),
-                            ftn.NotificationAction(
-                                id="next",
-                                title="⏭",
-                                cancel_notification=False,
-                                foreground=False,
-                                require_authentication=False,
-                            ),
-                        ],
-                        options=ftn.NotificationOptions(
-                            android=ftn.AndroidOptions(
-                                ongoing=True,
-                                silent=True,
-                                only_alert_once=True,
-                                large_icon=large_icon,
-                                category=ftn.AndroidCategory.TRANSPORT,
-                                visibility=ftn.AndroidVisibility.PUBLIC,
-                            )
+        try:
+            await asyncio.wait_for(
+                notificaciones.show(
+                    id=1001,
+                    title=titulo,
+                    body="Reproduciendo" if reproduciendo else "En pausa",
+                    actions=[
+                        ftn.NotificationAction(
+                            id="prev",
+                            title="  ⏮  ",
+                            cancel_notification=False,
+                            foreground=False,
+                            require_authentication=False,
                         ),
+                        ftn.NotificationAction(
+                            id="play_pause",
+                            title=texto_boton,
+                            cancel_notification=False,
+                            foreground=False,
+                            require_authentication=False,
+                        ),
+                        ftn.NotificationAction(
+                            id="next",
+                            title="  ⏭  ",
+                            cancel_notification=False,
+                            foreground=False,
+                            require_authentication=False,
+                        ),
+                    ],
+                    options=ftn.NotificationOptions(
+                        android=ftn.AndroidOptions(
+                            ongoing=reproduciendo,
+                            silent=True,
+                            only_alert_once=True,
+                            large_icon=large_icon,
+                            category=ftn.AndroidCategory.TRANSPORT,
+                            visibility=ftn.AndroidVisibility.PUBLIC,
+                        )
                     ),
-                    timeout=2.0,
-                )
-            except Exception:
-                pass
+                ),
+                timeout=1.5,
+            )
+        except Exception:
+            pass
 
+    async def actualizar_notificacion_bloqueo(titulo_custom=None, caratula_custom=None):
+        nonlocal tarea_notif_pendiente, titulo_stream_actual, caratula_stream_actual
+        if titulo_custom:
+            titulo_stream_actual = titulo_custom
+            caratula_stream_actual = caratula_custom
 
+        if 0 <= indice_actual < len(canciones_locales):
+            nombre_archivo = canciones_locales[indice_actual]
+            titulo = os.path.splitext(nombre_archivo)[0]
+            ruta_caratula = obtener_caratula(nombre_archivo)
+        elif titulo_stream_actual:
+            titulo = titulo_stream_actual
+            ruta_caratula = caratula_stream_actual
+        else:
+            return
+
+        if tarea_notif_pendiente and not tarea_notif_pendiente.done():
+            tarea_notif_pendiente.cancel()
+
+        tarea_notif_pendiente = page.run_task(
+            _enviar_notificacion_async, titulo, ruta_caratula, esta_reproduciendo
+        )
+   
 
 
     
@@ -271,41 +271,20 @@ def main(page: ft.Page):
 
     page.services.append(audio_player) if hasattr(page, "services") else page.overlay.append(audio_player)
 
-
-
-#     async def reproducir_indice(idx):
-#         nonlocal indice_actual
-#         if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
-#             return
-#         indice_actual = idx
-#         nombre = canciones_locales[indice_actual]
-#         lbl_cancion_actual.value = os.path.splitext(nombre)[0]
-#         slider_progreso.value = 0
-#         await audio_player.pause()
-#         # audio_player.src = f"/{nombre}"
-#         ruta_completa = os.path.join(ruta_actual, nombre)
-# #        ruta_relativa = os.path.relpath(ruta_completa, raiz_storage).replace("\\", "/")
-# #        audio_player.src = f"/{ruta_relativa}"
-# #        ruta_completa = os.path.join(carpeta_input.value.strip(), nombre)
-#         audio_player.src = ruta_completa
-        
-#         page.update()
-#         await audio_player.play()
-#         actualizar_lista_ui()
-
     async def reproducir_indice(idx):
-        nonlocal indice_actual, cambiando_pista
+        nonlocal indice_actual, cambiando_pista, titulo_stream_actual
         if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
             return
         if contenedor_video_mini.visible:
             await cerrar_reproductor_video()
 
+        titulo_stream_actual = None
         cambiando_pista = True
         try:
             anterior_idx = indice_actual
             indice_actual = idx
             nombre = canciones_locales[indice_actual]
-            lbl_cancion_actual.value = os.path.splitext(nombre)
+            lbl_cancion_actual.value = os.path.splitext(nombre)[0]
             slider_progreso.value = 0
             slider_progreso.max = 100
 
@@ -322,12 +301,21 @@ def main(page: ft.Page):
             await asyncio.sleep(0.15)
             cambiando_pista = False
 
-
-
-
-
     async def toggle_play_pause(e):
-        if indice_actual == -1:
+        nonlocal esta_reproduciendo
+        if video_player and contenedor_video_mini.visible:
+            if esta_reproduciendo:
+                await video_player.pause()
+                esta_reproduciendo = False
+            else:
+                await video_player.play()
+                esta_reproduciendo = True
+            btn_play_pause.icon = ft.Icons.PAUSE if esta_reproduciendo else ft.Icons.PLAY_ARROW
+            page.update()
+            await actualizar_notificacion_bloqueo()
+            return
+
+        if indice_actual < 0 or indice_actual >= len(canciones_locales):
             if canciones_locales:
                 await reproducir_indice(0)
             return
@@ -336,6 +324,8 @@ def main(page: ft.Page):
             await audio_player.pause()
         else:
             await audio_player.resume()
+
+
 
 
     
@@ -352,10 +342,7 @@ def main(page: ft.Page):
         nonlocal arrastrando_slider
         arrastrando_slider = True
 
-    # async def on_slider_end(e):
-    #     nonlocal arrastrando_slider
-    #     arrastrando_slider = False
-    #     await audio_player.seek(int(e.control.value))
+ 
     
     async def on_slider_end(e):
         nonlocal arrastrando_slider
@@ -536,7 +523,7 @@ def main(page: ft.Page):
 
 
     def escanear_canciones(e=None):
-        nonlocal canciones_locales
+        nonlocal canciones_locales, indice_actual
         exts = (".m4a", ".mp3", ".webm", ".opus", ".ogg", ".wav", ".flac", ".aac")
         try:
             archivos = [
@@ -553,7 +540,12 @@ def main(page: ft.Page):
             )
             page.update()
             return
+
+        
+        if indice_actual >= len(canciones_locales):
+            indice_actual = -1
         actualizar_lista_ui()
+
 
 
     
@@ -682,7 +674,6 @@ def main(page: ft.Page):
             pass
 
 
-
     def descargar_playlist(url, max_hilos):
         os.makedirs(ruta_actual, exist_ok=True)
 
@@ -691,21 +682,29 @@ def main(page: ft.Page):
         progress_bar.value = None
         page.update()
 
-        # 1. Extraer rápidamente todas las URLs de la playlist sin descargar
         ydl_extract_opts = {
             'extract_flat': True,
             'quiet': True,
-            'ignoreerrors': True
+            'ignoreerrors': True,
+            'nocheckcertificate': True,
         }
 
         urls_videos = []
         try:
             with yt_dlp.YoutubeDL(ydl_extract_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                if 'entries' in info:
-                    urls_videos = [entry['url'] for entry in info['entries'] if entry and entry.get('url')]
-                else:
-                    # Por si el usuario pegó el enlace de un solo video en lugar de una lista
+                if info and 'entries' in info and info['entries']:
+                    for entry in info['entries']:
+                        if not entry:
+                            continue
+                        v_url = entry.get('url') or (
+                            "".join(["https://", "www.", "youtube.com", "/watch?v=", entry['id']])
+                            if entry.get('id') else None
+                        )
+
+                        if v_url:
+                            urls_videos.append(v_url)
+                elif info:
                     urls_videos = [url]
         except Exception as e:
             status_text.value = f"Error al leer lista: {str(e)}"
@@ -727,44 +726,6 @@ def main(page: ft.Page):
         status_text.value = f"Descargando 0 de {total} canciones ({max_hilos} hilos)..."
         page.update()
 
-        # 2. Función que ejecutará cada hilo individualmente
-        # def descargar_una(video_url):
-        #     nonlocal completadas
-        #     os.makedirs(ruta_actual, exist_ok=True)
-        #     ydl_opts = {
-        #         'format': 'bestaudio[ext=m4a]/bestaudio',
-        #         'outtmpl': f'{ruta_actual}/%(title)s.%(ext)s',
-        #         'ignoreerrors': True,
-        #         'quiet': True,
-        #         'no_warnings': True
-        #     }
-
-            
-        #     try:
-        #         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        #             info_video = ydl.extract_info(video_url, download=True)
-        #             titulo = info_video.get('title', 'Canción') if info_video else 'Canción'
-        #             log(f"✔ {titulo}")
-        #     except Exception as e:
-        #         log(f"✖ Error en un enlace: {str(e)[:40]}")
-        #     finally:
-        #         with ui_lock:
-        #             completadas += 1
-        #             progress_bar.value = completadas / total
-        #             status_text.value = f"Progreso: {completadas} de {total} completadas"
-                    
-        #             page.update()
-        # def descargar_una(video_url):
-        #     nonlocal completadas
-        #     os.makedirs(ruta_actual, exist_ok=True)
-        #     ydl_opts = {
-        #         'format': 'bestaudio[ext=m4a]/bestaudio',
-        #         'outtmpl': f'{ruta_actual}/%(title)s.%(ext)s',
-        #         'ignoreerrors': False,
-        #         'quiet': True,
-        #         'no_warnings': True,
-        #     }
-
         def descargar_una(video_url):
             nonlocal completadas
             carpeta_caratulas = os.path.join(ruta_actual, ".caratulas")
@@ -779,29 +740,50 @@ def main(page: ft.Page):
                 'ignoreerrors': False,
                 'quiet': True,
                 'no_warnings': True,
+                'nocheckcertificate': True,
+                'retries': 3,
             }
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info_video = ydl.extract_info(video_url, download=True)
                     if not info_video:
-                        raise Exception("No se pudo obtener información del vídeo.")
+                        raise Exception("Vídeo no disponible.")
                     ruta_archivo = ydl.prepare_filename(info_video)
                     if not os.path.exists(ruta_archivo):
-                        raise Exception("El archivo no se guardó en el dispositivo.")
+                        raise Exception("No se pudo guardar el archivo.")
                     base_nombre = os.path.splitext(os.path.basename(ruta_archivo))[0]
                     incrustar_caratula_en_audio(ruta_archivo, info_video.get("thumbnail"), carpeta_caratulas, base_nombre)
                     titulo = info_video.get('title', 'Canción')
                     log(f"✔ {titulo}")
             except Exception as e:
                 msg_error = str(e).replace("ERROR: ", "").strip()
-                log(f"✖ Error ({video_url}): {msg_error[:80]}")
+                log(f"✖ Omitido: {msg_error[:70]}")
             finally:
-                with ui_lock:
-                    completadas += 1
-                    progress_bar.value = completadas / total
-                    status_text.value = f"Progreso: {completadas} de {total} completadas"
-                    page.update()
+                try:
+                    with ui_lock:
+                        completadas += 1
+                        progress_bar.value = completadas / total
+                        status_text.value = f"Progreso: {completadas} de {total} completadas"
+                        page.update()
+                except Exception:
+                    pass
+
+        with ThreadPoolExecutor(max_workers=max_hilos) as executor:
+            futures = [executor.submit(descargar_una, u) for u in urls_videos]
+            for f in futures:
+                try:
+                    f.result()
+                except Exception:
+                    pass
+
+        escanear_canciones()
+        status_text.value = f"¡Finalizado! Se procesaron {total} elementos."
+        btn_descargar.disabled = False
+        page.update()
+
+
+
 
         
                     
@@ -922,9 +904,8 @@ def main(page: ft.Page):
         ], spacing=4),
     )
 
-
     async def reproducir_video_youtube(video_url, titulo):
-        nonlocal indice_actual
+        nonlocal indice_actual, esta_reproduciendo
         indice_actual = -1
         lbl_cancion_actual.value = f"Cargando vídeo: {titulo}..."
         lbl_video_mini.value = titulo
@@ -933,7 +914,6 @@ def main(page: ft.Page):
         if esta_reproduciendo:
             await audio_player.pause()
         page.update()
-
 
         def extraer_stream():
             fmt = (
@@ -945,6 +925,7 @@ def main(page: ft.Page):
                 "format": fmt,
                 "quiet": True,
                 "no_warnings": True,
+                "nocheckcertificate": True,
                 "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -979,6 +960,8 @@ def main(page: ft.Page):
                     await video_player.pause()
                 contenedor_video_mini.visible = True
                 video_player.playlist = [ftv.VideoMedia(resource=stream_url, http_headers=headers)]
+                esta_reproduciendo = True
+                btn_play_pause.icon = ft.Icons.PAUSE
                 page.update()
                 await video_player.play()
             else:
@@ -992,6 +975,19 @@ def main(page: ft.Page):
             lbl_cancion_actual.value = "Error al reproducir vídeo"
             status_busqueda.value = f"Error: {str(err)[:65]}"
             page.update()
+
+    async def on_lifecycle_change(e: ft.AppLifecycleStateChangeEvent):
+        if e.state in (ft.AppLifecycleState.PAUSED, ft.AppLifecycleState.HIDDEN, ft.AppLifecycleState.INACTIVE):
+            if video_player and contenedor_video_mini.visible and esta_reproduciendo:
+                await asyncio.sleep(0.2)
+                try:
+                    await video_player.play()
+                except Exception:
+                    pass
+
+    page.on_app_lifecycle_state_change = on_lifecycle_change
+
+   
 
 
     def buscar_youtube_click(e=None):
@@ -1105,12 +1101,11 @@ def main(page: ft.Page):
                 page.update()
                 return
 
-            # yt_watch_base = "https://youtube.com" + "/watch?v="
-            # yt_img_base = "https://ytimg.com" + "/vi/"
-            # yt_watch_base = "https://youtube.com"
-            # yt_img_base = "https://ytimg.com"
-            yt_watch_base = "https://www." + "://youtube.com"
-            yt_img_base = "https://i." + "://ytimg.com"
+#             yt_watch_base = "https://youtube.com" + "/watch?v="
+#             yt_img_base = "https://ytimg.com" + "/vi/"
+            yt_watch_base = "".join(["https://", "www.", "youtube.com", "/watch?v="])
+            yt_img_base = "".join(["https://", "i.", "ytimg.com", "/vi/"])
+            
 
 
 
