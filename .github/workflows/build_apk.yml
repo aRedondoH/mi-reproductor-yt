@@ -26,12 +26,14 @@ jobs:
       - name: Pre-aceptar licencias de Android SDK
         run: |
           for SDK_DIR in "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$HOME/Android/Sdk" "/usr/local/lib/android/sdk"; do
-            if [ -n "$SDK_DIR" ]; then
-              mkdir -p "$SDK_DIR/licenses"
-              printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" > "$SDK_DIR/licenses/android-sdk-license"
-              printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n504667f4c0de7af1a06de9f4b1727b84351f2910\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
+            if [ -d "$SDK_DIR" ]; then
+              SDKMGR=$(find "$SDK_DIR" -name "sdkmanager" 2>/dev/null | head -n 1)
+              if [ -n "$SDKMGR" ]; then
+                yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+              fi
             fi
           done
+
 
       - name: Instalar Flet y dependencias
         run: |
