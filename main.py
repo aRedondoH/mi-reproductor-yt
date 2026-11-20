@@ -219,35 +219,18 @@ def main(page: ft.Page):
         return f"{s // 60:02d}:{s % 60:02d}"
 
     async def on_position_changed(e: fta.AudioPositionChangeEvent):
+        pos_ms = e.position.in_milliseconds if hasattr(e.position, "in_milliseconds") else int(e.position or 0)
         if not arrastrando_slider and slider_progreso.max > 0:
-            slider_progreso.value = min(e.position, slider_progreso.max)
-            lbl_tiempo.value = f"{formatear_tiempo(e.position)} / {formatear_tiempo(slider_progreso.max)}"
+            slider_progreso.value = min(pos_ms, slider_progreso.max)
+            lbl_tiempo.value = f"{formatear_tiempo(pos_ms)} / {formatear_tiempo(slider_progreso.max)}"
             page.update()
-
-    # async def on_duration_changed(e: fta.AudioDurationChangeEvent):
-    #     if e.duration > 0:
-    #         slider_progreso.max = e.duration
-    #         page.update()
-
-    # async def on_state_changed(e: fta.AudioStateChangeEvent):
-    #     nonlocal esta_reproduciendo
-    #     if e.state == fta.AudioState.COMPLETED:
-    #         await siguiente_cancion(None)
-    #     elif e.state == fta.AudioState.PLAYING:
-    #         esta_reproduciendo = True
-    #         btn_play_pause.icon = ft.Icons.PAUSE
-    #         page.update()
-    #     elif e.state in (fta.AudioState.PAUSED, fta.AudioState.STOPPED):
-    #         esta_reproduciendo = False
-    #         btn_play_pause.icon = ft.Icons.PLAY_ARROW
-    #         page.update()
     
     async def on_duration_changed(e: fta.AudioDurationChangeEvent):
         dur_ms = e.duration.in_milliseconds if hasattr(e.duration, "in_milliseconds") else int(e.duration or 0)
         if dur_ms > 0:
             slider_progreso.max = dur_ms
             lbl_tiempo.value = f"{formatear_tiempo(slider_progreso.value)} / {formatear_tiempo(dur_ms)}"
-            page.update()
+            page.update()        
 
     cambiando_pista = False
 
@@ -387,43 +370,7 @@ def main(page: ft.Page):
     caratulas_buscadas = set()
     descargando_caratulas = False
 
-  
 
-
-
-
-    # def actualizar_lista_ui():
-    #     lista_canciones_ui.controls.clear()
-    #     for i, archivo in enumerate(canciones_locales):
-    #         es_actual = (i == indice_actual)
-    #         lista_canciones_ui.controls.append(
-    #             ft.ListTile(
-    #                 leading=ft.Icon(ft.Icons.GRAPHIC_EQ if es_actual else ft.Icons.MUSIC_NOTE),
-    #                 title=ft.Text(os.path.splitext(archivo)[0], max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-    #                 on_click=lambda e, idx=i: page.run_task(reproducir_indice, idx)
-    #             )
-    #         )
-    #     page.update()
-
-    # def actualizar_lista_ui():
-    #     lista_canciones_ui.controls.clear()
-    #     for i, archivo in enumerate(canciones_locales):
-    #         es_actual = (i == indice_actual)
-    #         lista_canciones_ui.controls.append(
-    #             ft.ListTile(
-    #                 dense=True,
-    #                 content_padding=ft.Padding.symmetric(horizontal=4, vertical=0),
-    #                 leading=ft.Icon(ft.Icons.GRAPHIC_EQ if es_actual else ft.Icons.MUSIC_NOTE, size=16),
-    #                 title=ft.Text(
-    #                     os.path.splitext(archivo)[0],
-    #                     size=12,
-    #                     max_lines=1,
-    #                     overflow=ft.TextOverflow.ELLIPSIS,
-    #                 ),
-    #                 on_click=lambda e, idx=i: page.run_task(reproducir_indice, idx),
-    #             )
-    #         )
-    #     page.update()
 
     def obtener_caratula(nombre_archivo):
         base = os.path.splitext(nombre_archivo)[0]
@@ -874,37 +821,6 @@ def main(page: ft.Page):
             page.update()
             return
         max_hilos = os.cpu_count() or 4
-        threading.Thread(target=descargar_playlist, args=(url, max_hilos), daemon=True).start()
-
-    btn_descargar = ft.Button("Descargar Todo", icon=ft.Icons.DOWNLOAD, on_click=iniciar_click)
-
-            page.update()
-
-
-        
-                    
-
-        # 3. Lanzar el pool de hilos en paralelo
-        with ThreadPoolExecutor(max_workers=max_hilos) as executor:
-            executor.map(descargar_una, urls_videos)
-
-        escanear_canciones()
-        status_text.value = f"¡Finalizado! Se procesaron {total} elementos."
-        btn_descargar.disabled = False
-        page.update()
-
-    def iniciar_click(e):
-        url = url_input.value.strip()
-        if not url:
-            status_text.value = "Por favor, introduce un enlace válido."
-            page.update()
-            return
-        
-        btn_descargar.disabled = True
-        log_column.controls.clear()
-        max_hilos = os.cpu_count() or 4
-        page.update()
-        
         threading.Thread(target=descargar_playlist, args=(url, max_hilos), daemon=True).start()
 
     btn_descargar = ft.Button("Descargar Todo", icon=ft.Icons.DOWNLOAD, on_click=iniciar_click)
