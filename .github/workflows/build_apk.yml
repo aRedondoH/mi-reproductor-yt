@@ -34,11 +34,25 @@ jobs:
             fi
           done
 
+      - name: Configurar repositorios de Gradle
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat << 'EOF' > ~/.gradle/init.d/repos.gradle.kts
+          beforeSettings {
+              pluginManagement {
+                  repositories {
+                      gradlePluginPortal()
+                      mavenCentral()
+                      google()
+                  }
+              }
+          }
+          EOF
 
       - name: Instalar Flet y dependencias
         run: |
           pip install --upgrade pip
-          pip install --upgrade flet flet-audio flet-video flet-permission-handler flet-notifications yt-dlp mutagen
+          pip install --upgrade flet flet-audio flet-video flet-permission-handler flet-notifications yt-dlp mutagen certifi
 
       - name: Compilar APK
         timeout-minutes: 45
