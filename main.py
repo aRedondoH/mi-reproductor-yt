@@ -977,13 +977,14 @@ def main(page: ft.Page):
             page.update()
 
     async def on_lifecycle_change(e: ft.AppLifecycleStateChangeEvent):
-        if e.state in (ft.AppLifecycleState.PAUSED, ft.AppLifecycleState.HIDDEN, ft.AppLifecycleState.INACTIVE):
+        if e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE, ft.AppLifecycleState.INACTIVE):
             if video_player and contenedor_video_mini.visible and esta_reproduciendo:
                 await asyncio.sleep(0.2)
                 try:
                     await video_player.play()
                 except Exception:
                     pass
+
 
     page.on_app_lifecycle_state_change = on_lifecycle_change
 
