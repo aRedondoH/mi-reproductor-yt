@@ -1,16 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Nov 20 12:43:36 2026
+Created on Fri Nov 20 17:07:35 2026
 
 @author: Arh
 """
 
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Nov 20 09:21:54 2026
-
-@author: Arh
-"""
 
 
 import flet as ft
@@ -230,7 +224,8 @@ def main(page: ft.Page):
         if not arrastrando_slider and slider_progreso.max > 0:
             slider_progreso.value = min(pos_ms, slider_progreso.max)
             lbl_tiempo.value = f"{formatear_tiempo(pos_ms)} / {formatear_tiempo(slider_progreso.max)}"
-            page.update()
+            if not app_en_segundo_plano:
+                page.update()
     
     async def on_duration_changed(e: fta.AudioDurationChangeEvent):
         dur_ms = e.duration.in_milliseconds if hasattr(e.duration, "in_milliseconds") else int(e.duration or 0)
@@ -252,29 +247,44 @@ def main(page: ft.Page):
         elif e.state == fta.AudioState.PLAYING:
             esta_reproduciendo = True
             btn_play_pause.icon = ft.Icons.PAUSE
-            page.update()
+            if not app_en_segundo_plano:
+                page.update()
             page.run_task(actualizar_notificacion_bloqueo)
         elif e.state in (fta.AudioState.PAUSED, fta.AudioState.STOPPED):
             if cambiando_pista or ahora < ignorar_estados_hasta:
                 return
             esta_reproduciendo = False
             btn_play_pause.icon = ft.Icons.PLAY_ARROW
-            page.update()
+            if not app_en_segundo_plano:
+                page.update()
             page.run_task(actualizar_notificacion_bloqueo)
 
 
+
     
+    app_en_segundo_plano = False
+
+    try:
+        audio_context = fta.AudioContext(
+            focus=fta.AudioFocus.GAIN,
+            respect_silence=False,
+            stay_awake=True,
+        )
+    except TypeError:
+        audio_context = fta.AudioContext(
+            focus=fta.AudioFocus.GAIN,
+            respect_silence=False,
+        )
+
     audio_player = fta.Audio(
         autoplay=False,
         release_mode=fta.ReleaseMode.STOP,
-        context=fta.AudioContext(
-            focus=fta.AudioFocus.GAIN,
-            respect_silence=False,
-        ),
+        context=audio_context,
         on_position_change=on_position_changed,
         on_duration_change=on_duration_changed,
         on_state_change=on_state_changed,
     )
+
 
     page.services.append(audio_player) if hasattr(page, "services") else page.overlay.append(audio_player)
 
@@ -282,6 +292,7 @@ def main(page: ft.Page):
     indice_video_yt = -1
     reproduccion_lock = asyncio.Lock()
     token_reproduccion = 0
+
 
     async def reproducir_indice(idx):
         nonlocal indice_actual, cambiando_pista, ignorar_estados_hasta, titulo_stream_actual, token_reproduccion, esta_reproduciendo
@@ -299,12 +310,13 @@ def main(page: ft.Page):
         slider_progreso.value = 0
         slider_progreso.max = 100
 
-        for pos in (anterior_idx, indice_actual):
-            if 0 <= pos < len(lista_canciones_ui.controls):
-                tile = lista_canciones_ui.controls[pos]
-                if isinstance(tile.title, ft.Text):
-                    tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
-        page.update()
+        if not app_en_segundo_plano:
+            for pos in (anterior_idx, indice_actual):
+                if 0 <= pos < len(lista_canciones_ui.controls):
+                    tile = lista_canciones_ui.controls[pos]
+                    if isinstance(tile.title, ft.Text):
+                        tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
+            page.update()
 
         async with reproduccion_lock:
             if mi_token != token_reproduccion:
@@ -313,21 +325,36 @@ def main(page: ft.Page):
                 await cerrar_reproductor_video()
 
             cambiando_pista = True
-            ignorar_estados_hasta = time.monotonic() + 1.0
+            ignorar_estados_hasta = time.monotonic() + 1.2
             try:
                 try:
-                    await audio_player.pause()
+                    await audio_player.stop()
                 except Exception:
                     pass
-                audio_player.src = os.path.join(ruta_actual, nombre)
-                page.update()
-                await asyncio.sleep(0.08)
+                try:
+                    await audio_player.release()
+                except Exception:
+                    pass
+
+                await asyncio.sleep(0.06)
                 if mi_token != token_reproduccion:
                     return
+
+                audio_player.src = os.path.join(ruta_actual, nombre)
+                try:
+                    audio_player.update()
+                except Exception:
+                    page.update()
+
+                await asyncio.sleep(0.12)
+                if mi_token != token_reproduccion:
+                    return
+
                 await audio_player.play()
                 esta_reproduciendo = True
                 btn_play_pause.icon = ft.Icons.PAUSE
-                page.update()
+                if not app_en_segundo_plano:
+                    page.update()
                 await actualizar_notificacion_bloqueo()
             finally:
                 await asyncio.sleep(0.35)
@@ -449,99 +476,6 @@ def main(page: ft.Page):
         except Exception:
             pass
         return None
-
-
-    def descargar_caratulas_faltantes():
-        nonlocal descargando_caratulas
-        if descargando_caratulas:
-            return
-        descargando_caratulas = True
-
-        def _iniciar_ui():
-            btn_caratulas.disabled = True
-            status_text.value = "Buscando carátulas..."
-        ui_sync(_iniciar_ui)
-
-        try:
-            carpeta_actual_snap = ruta_actual
-            carpeta_caratulas = os.path.join(carpeta_actual_snap, ".caratulas")
-            copia_canciones = list(canciones_locales)
-            hubo_cambios = False
-
-            for archivo in copia_canciones:
-                if ruta_actual != carpeta_actual_snap:
-                    return
-                if obtener_caratula(archivo) is None:
-                    if extraer_caratula_embebida(archivo):
-                        hubo_cambios = True
-
-            if hubo_cambios and ruta_actual == carpeta_actual_snap:
-                ui_sync(actualizar_lista_ui)
-                hubo_cambios = False
-
-            pendientes = [
-                f for f in copia_canciones
-                if (carpeta_actual_snap, f) not in caratulas_buscadas and obtener_caratula(f) is None
-            ]
-            if not pendientes:
-                ui_sync(lambda: setattr(status_text, "value", "Carátulas al día"))
-                return
-
-            opts = {
-                "extract_flat": "in_playlist",
-                "quiet": True,
-                "no_warnings": True,
-                "ignoreerrors": True,
-                "nocheckcertificate": True,
-                "socket_timeout": 10,
-            }
-            yt_img_base = "https://i.ytimg.com/vi/"
-            encontradas = 0
-            total_pendientes = len(pendientes)
-
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                for idx_p, archivo in enumerate(pendientes):
-                    if ruta_actual != carpeta_actual_snap:
-                        return
-                    caratulas_buscadas.add((carpeta_actual_snap, archivo))
-                    base_nombre, _ = os.path.splitext(archivo)
-                    ui_sync(lambda i=idx_p: setattr(status_text, "value", f"Carátula {i + 1}/{total_pendientes}..."))
-
-                    try:
-                        info = ydl.extract_info(f"ytsearch1:{base_nombre}", download=False)
-                        entries = [e for e in (info.get("entries") or []) if e] if info else []
-                        if not entries:
-                            continue
-                        primer_res = entries[0]
-                        vid_id = primer_res.get("id")
-
-                        thumb_url = primer_res.get("thumbnail") or (
-                            f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None
-                        )
-                        if not thumb_url:
-                            continue
-
-                        ruta_audio = os.path.join(carpeta_actual_snap, archivo)
-                        incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre)
-                        if obtener_caratula(archivo):
-                            encontradas += 1
-                            hubo_cambios = True
-                            if encontradas % 10 == 0 and ruta_actual == carpeta_actual_snap:
-                                ui_sync(actualizar_lista_ui)
-                                hubo_cambios = False
-                    except Exception:
-                        continue
-
-            if hubo_cambios and ruta_actual == carpeta_actual_snap:
-                ui_sync(actualizar_lista_ui)
-            ui_sync(lambda: setattr(status_text, "value", f"Carátulas encontradas: {encontradas}"))
-        finally:
-            descargando_caratulas = False
-            def _fin_ui():
-                btn_caratulas.disabled = False
-            ui_sync(_fin_ui)
-
-
 
     def iniciar_descarga_caratulas(e=None):
         claves_carpeta = [k for k in caratulas_buscadas if k[0] == ruta_actual]
@@ -672,33 +606,50 @@ def main(page: ft.Page):
                 log_column.controls = log_column.controls[-150:]
         ui_sync(_agregar)
 
+    def _descargar_bytes_url(url_img):
+        if not url_img:
+            return None
+        ctx = ssl._create_unverified_context()
+        url_limpia = url_img.split("?")[0]
+        candidatas = []
+        if "i.ytimg.com" in url_limpia:
+            url_jpg = url_limpia.replace("/vi_webp/", "/vi/").replace(".webp", ".jpg")
+            candidatas.extend([url_jpg, url_limpia])
+        else:
+            candidatas.append(url_img)
+
+        for u in dict.fromkeys(candidatas):
+            try:
+                req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                    data = resp.read()
+                    if data and len(data) > 500:
+                        return data
+            except Exception:
+                continue
+        return None
+
     def incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre):
         os.makedirs(carpeta_caratulas, exist_ok=True)
         datos_img = None
-        posible = ""
 
         for ext in (".jpg", ".jpeg", ".png", ".webp"):
             ruta_test = os.path.join(carpeta_caratulas, base_nombre + ext)
             if os.path.isfile(ruta_test):
-                posible = ruta_test
                 with open(ruta_test, "rb") as f:
                     datos_img = f.read()
                 break
 
-        if thumb_url and (not datos_img or posible.endswith(".webp")):
-            try:
-                jpg_url = thumb_url.replace("vi_webp/", "vi/").replace(".webp", ".jpg")
-                req = urllib.request.Request(jpg_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    datos_img = resp.read()
-                ruta_jpg = os.path.join(carpeta_caratulas, base_nombre + ".jpg")
-                with open(ruta_jpg, "wb") as f:
+        if not datos_img and thumb_url:
+            datos_img = _descargar_bytes_url(thumb_url)
+            if datos_img:
+                ext_out = ".webp" if datos_img[:4] == b"RIFF" else ".jpg"
+                ruta_guardada = os.path.join(carpeta_caratulas, base_nombre + ext_out)
+                with open(ruta_guardada, "wb") as f:
                     f.write(datos_img)
-            except Exception:
-                pass
 
         if not datos_img:
-            return
+            return False
 
         try:
             from mutagen.mp4 import MP4, MP4Cover
@@ -715,6 +666,125 @@ def main(page: ft.Page):
                 tags.save()
         except Exception:
             pass
+        return True
+
+    def _buscar_caratula_itunes(termino):
+        try:
+            q = urllib.parse.quote(termino)
+            dominio = "://apple.com"
+            ruta = "/search?term=" + q + "&media=music&limit=1"
+            url_api = "https" + "://" + dominio + ruta
+            data = _descargar_bytes_url(url_api)
+            if not data:
+                return None
+            import json
+            res = json.loads(data.decode("utf-8", errors="ignore"))
+            items = res.get("results") or []
+            if items and items[0].get("artworkUrl100"):
+                return items[0]["artworkUrl100"].replace("100x100bb", "600x600bb")
+        except Exception:
+            pass
+        return None
+
+    def descargar_caratulas_faltantes():
+        nonlocal descargando_caratulas
+        if descargando_caratulas:
+            return
+        descargando_caratulas = True
+
+        def _iniciar_ui():
+            btn_caratulas.disabled = True
+            status_text.value = "Buscando carátulas..."
+        ui_sync(_iniciar_ui)
+
+        try:
+            carpeta_actual_snap = ruta_actual
+            carpeta_caratulas = os.path.join(carpeta_actual_snap, ".caratulas")
+            copia_canciones = list(canciones_locales)
+            hubo_cambios = False
+
+            for archivo in copia_canciones:
+                if ruta_actual != carpeta_actual_snap:
+                    return
+                if obtener_caratula(archivo) is None:
+                    if extraer_caratula_embebida(archivo):
+                        hubo_cambios = True
+
+            if hubo_cambios and ruta_actual == carpeta_actual_snap:
+                ui_sync(actualizar_lista_ui)
+                hubo_cambios = False
+
+            pendientes = [
+                f for f in copia_canciones
+                if (carpeta_actual_snap, f) not in caratulas_buscadas and obtener_caratula(f) is None
+            ]
+            if not pendientes:
+                ui_sync(lambda: setattr(status_text, "value", "Carátulas al día"))
+                return
+
+            opts = {
+                "extract_flat": True,
+                "quiet": True,
+                "no_warnings": True,
+                "ignoreerrors": True,
+                "nocheckcertificate": True,
+                "socket_timeout": 10,
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            }
+            yt_img_base = "https://i.ytimg.com/vi/"
+            encontradas = 0
+            ultimo_error = ""
+            total_pendientes = len(pendientes)
+
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                for idx_p, archivo in enumerate(pendientes):
+                    if ruta_actual != carpeta_actual_snap:
+                        return
+                    caratulas_buscadas.add((carpeta_actual_snap, archivo))
+                    base_nombre, _ = os.path.splitext(archivo)
+                    ui_sync(lambda i=idx_p: setattr(status_text, "value", f"Carátula {i + 1}/{total_pendientes}..."))
+
+                    thumb_url = None
+                    try:
+                        info = ydl.extract_info(f"ytsearch1:{base_nombre}", download=False)
+                        entries = [e for e in (info.get("entries") or []) if e] if info else []
+                        if entries:
+                            primer_res = entries[0]
+                            vid_id = primer_res.get("id")
+                            thumbs = primer_res.get("thumbnails") or []
+                            thumb_url = (
+                                primer_res.get("thumbnail")
+                                or (thumbs[-1].get("url") if thumbs and isinstance(thumbs[-1], dict) else None)
+                                or (f"{yt_img_base}{vid_id}/hqdefault.jpg" if vid_id else None)
+                            )
+                    except Exception as err:
+                        ultimo_error = str(err)[:45]
+
+                    if not thumb_url:
+                        thumb_url = _buscar_caratula_itunes(base_nombre)
+
+                    if not thumb_url:
+                        continue
+
+                    ruta_audio = os.path.join(carpeta_actual_snap, archivo)
+                    if incrustar_caratula_en_audio(ruta_audio, thumb_url, carpeta_caratulas, base_nombre):
+                        encontradas += 1
+                        hubo_cambios = True
+                        if encontradas % 5 == 0 and ruta_actual == carpeta_actual_snap:
+                            ui_sync(actualizar_lista_ui)
+                            hubo_cambios = False
+
+            if hubo_cambios and ruta_actual == carpeta_actual_snap:
+                ui_sync(actualizar_lista_ui)
+
+            msg_final = f"Carátulas encontradas: {encontradas}"
+            if encontradas == 0 and ultimo_error:
+                msg_final += f" ({ultimo_error})"
+            ui_sync(lambda: setattr(status_text, "value", msg_final))
+        finally:
+            descargando_caratulas = False
+            ui_sync(lambda: setattr(btn_caratulas, "disabled", False))
+
 
     def descargar_playlist(url, max_hilos):
         nonlocal descarga_en_curso
@@ -1045,13 +1115,21 @@ def main(page: ft.Page):
             page.update()
 
     async def on_lifecycle_change(e: ft.AppLifecycleStateChangeEvent):
+        nonlocal app_en_segundo_plano
         if e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE, ft.AppLifecycleState.INACTIVE):
+            app_en_segundo_plano = True
             if video_player and contenedor_video_mini.visible and esta_reproduciendo:
                 await asyncio.sleep(0.2)
                 try:
                     await video_player.play()
                 except Exception:
                     pass
+        elif e.state == ft.AppLifecycleState.RESUME:
+            app_en_segundo_plano = False
+            try:
+                page.update()
+            except Exception:
+                pass
 
     page.on_app_lifecycle_state_change = on_lifecycle_change
 
