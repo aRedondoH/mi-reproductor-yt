@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Descargar código
         uses: actions/checkout@v4
@@ -23,16 +23,26 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: Pre-aceptar licencias de Android SDK
+        run: |
+          for SDK_DIR in "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$HOME/Android/Sdk" "/usr/local/lib/android/sdk"; do
+            if [ -n "$SDK_DIR" ]; then
+              mkdir -p "$SDK_DIR/licenses"
+              printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" > "$SDK_DIR/licenses/android-sdk-license"
+              printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n504667f4c0de7af1a06de9f4b1727b84351f2910\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
+            fi
+          done
+
       - name: Instalar Flet y dependencias
         run: |
           pip install --upgrade pip
-          pip install --upgrade flet flet-audio flet-permission-handler flet-notifications yt-dlp
+          pip install --upgrade flet flet-audio flet-video flet-permission-handler flet-notifications yt-dlp mutagen
 
       - name: Compilar APK
         timeout-minutes: 45
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
-        run: flet build apk --arch arm64-v8a --yes
+        run: flet build apk --arch arm64-v8a --yes -vv
 
       - name: Subir APK generado
         uses: actions/upload-artifact@v4
