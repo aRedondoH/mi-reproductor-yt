@@ -3,7 +3,7 @@ name: Compilar APK Android
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, versionEstable ]
 
 jobs:
   build:
