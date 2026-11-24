@@ -1,13 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Nov 20 17:55:34 2026
-
-@author: Arh
-"""
-
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Nov 20 17:07:35 2026
+Created on Tue Nov 24 09:05:34 2026
 
 @author: Arh
 """
@@ -168,13 +161,6 @@ def main(page: ft.Page):
         )
 
     
-   
-
-
-    
-    
-    
-    
     page.services.append(permisos) if hasattr(page, "services") else page.overlay.append(permisos)
 
     raiz_storage = "/storage/emulated/0" if os.path.exists("/storage/emulated/0") else os.path.abspath(".")
@@ -183,16 +169,18 @@ def main(page: ft.Page):
 
     lbl_ruta_actual = ft.Text(ruta_actual, size=12, color=ft.Colors.GREY_400, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True)
 
-    def establecer_carpeta(nueva_ruta):
-        nonlocal ruta_actual
-        if os.path.isdir(nueva_ruta):
-            ruta_actual = nueva_ruta
-            lbl_ruta_actual.value = ruta_actual
-            escanear_canciones()
-            status_text.value = f"Carpeta: {os.path.basename(ruta_actual)}"
-        else:
-            status_text.value = "No se pudo acceder a la carpeta."
-        page.update()
+def establecer_carpeta(nueva_ruta):
+    nonlocal ruta_actual
+    if os.path.isdir(nueva_ruta):
+        ruta_actual = nueva_ruta
+        lbl_ruta_actual.value = ruta_actual
+        page.client_storage.set("ultima_carpeta", nueva_ruta)  # <-- AÑADIR
+        escanear_canciones()
+        status_text.value = f"Carpeta: {os.path.basename(ruta_actual)}"
+    else:
+        status_text.value = "No se pudo acceder a la carpeta."
+    page.update()
+
 
     async def abrir_selector_carpeta(e=None):
         try:
@@ -1127,14 +1115,18 @@ def main(page: ft.Page):
                 page.update()
 
     async def on_video_complete(e):
-        nonlocal esta_reproduciendo
-        if cambiando_pista or time.monotonic() < ignorar_estados_hasta:
+        nonlocal esta_reproduciendo, ignorar_estados_hasta
+        ahora = time.monotonic()
+        if cambiando_pista or ahora < ignorar_estados_hasta:
             return
+        ignorar_estados_hasta = ahora + 1.5  # Evita doble salto o bucle
         esta_reproduciendo = False
         await siguiente_cancion(None)
 
+
     video_player = ftv.Video(
         playlist=[],
+        playlist_mode=ftv.PlaylistMode.NONE,  # <-- EVITA EL LOOP NATIVO
         aspect_ratio=16 / 9,
         autoplay=True,
         expand=True,
@@ -1143,6 +1135,7 @@ def main(page: ft.Page):
         on_duration_change=on_video_duration_change,
         on_complete=on_video_complete,
     ) if ftv else None
+
 
     lbl_video_mini = ft.Text("", size=12, weight=ft.FontWeight.BOLD, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True)
     fila_cabecera_video = ft.Row([
@@ -1653,23 +1646,31 @@ def main(page: ft.Page):
         ], spacing=0)
     )
 
-    async def inicializar_app():
-        try:
-            await permisos.request(fph.Permission.MANAGE_EXTERNAL_STORAGE)
-            await permisos.request(fph.Permission.AUDIO)
-            await permisos.request(fph.Permission.STORAGE)
-            await permisos.request(fph.Permission.IGNORE_BATTERY_OPTIMIZATIONS)
-            await notificaciones.request_permissions()
-        except Exception:
-            pass
-        carpeta_music = os.path.join(raiz_storage, "Music")
-        try:
-            if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
-                establecer_carpeta(carpeta_music)
-                return
-        except Exception:
-            pass
-        escanear_canciones()
+async def inicializar_app():
+    try:
+        await permisos.request(fph.Permission.MANAGE_EXTERNAL_STORAGE)
+        await permisos.request(fph.Permission.AUDIO)
+        await permisos.request(fph.Permission.STORAGE)
+        await permisos.request(fph.Permission.IGNORE_BATTERY_OPTIMIZATIONS)
+        await notificaciones.request_permissions()
+    except Exception:
+        pass
+
+    # Recuperar carpeta guardada
+    carpeta_guardada = await page.client_storage.get_async("ultima_carpeta")
+    if carpeta_guardada and os.path.isdir(carpeta_guardada):
+        establecer_carpeta(carpeta_guardada)
+        return
+
+    carpeta_music = os.path.join(raiz_storage, "Music")
+    try:
+        if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
+            establecer_carpeta(carpeta_music)
+            return
+    except Exception:
+        pass
+    escanear_canciones()
+
 
 
     page.add(
