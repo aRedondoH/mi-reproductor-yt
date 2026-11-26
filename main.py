@@ -46,6 +46,8 @@ def main(page: ft.Page):
     page.padding = 0
 
     permisos = fph.PermissionHandler()
+    prefs = ft.SharedPreferences()
+
 
     ultima_caratula_cache = (None, None)
     titulo_stream_actual = None
@@ -53,6 +55,15 @@ def main(page: ft.Page):
     tarea_notif_pendiente = None
 
     ultimo_clic_notif = 0.0
+    ultimo_guardado_pos = 0.0
+
+    async def guardar_estado_reproduccion(pos_ms=None):
+        if 0 <= indice_actual < len(canciones_locales):
+            await prefs.set("ultima_carpeta", ruta_actual)
+            await prefs.set("ultima_cancion", canciones_locales[indice_actual])
+            if pos_ms is not None:
+                await prefs.set("ultima_posicion_ms", int(pos_ms))
+
 
     async def manejar_accion_notificacion(e: ftn.NotificationActionEvent):
         nonlocal ultimo_clic_notif
@@ -61,12 +72,21 @@ def main(page: ft.Page):
             return
         ultimo_clic_notif = ahora
 
+        # ESTO ES PARA PROBARLO EN WINDOWS CON WEB
+        # if e.action_id == "prev":
+            # await anterior_cancion(None)
+        # elif e.action_id == "play_pause":
+            # await toggle_play_pause(None)
+        # elif e.action_id == "next":
+            # await siguiente_cancion(None)
         if e.action_id == "prev":
-            page.run_task(anterior_cancion, None)
+            await anterior_cancion(None)
         elif e.action_id == "play_pause":
-            page.run_task(toggle_play_pause, None)
+            await toggle_play_pause(None)
         elif e.action_id == "next":
-            page.run_task(siguiente_cancion, None)
+            await siguiente_cancion(None)
+
+
 
 
     notificaciones = ftn.Notifications(on_action=manejar_accion_notificacion)
@@ -175,7 +195,9 @@ def main(page: ft.Page):
         if os.path.isdir(nueva_ruta):
             ruta_actual = nueva_ruta
             lbl_ruta_actual.value = ruta_actual
-            page.client_storage.set("ultima_carpeta", nueva_ruta)
+            page.run_task(prefs.set, "ultima_carpeta", nueva_ruta)
+
+
             escanear_canciones()
             status_text.value = f"Carpeta: {os.path.basename(ruta_actual)}"
         else:
@@ -219,12 +241,18 @@ def main(page: ft.Page):
         return f"{s // 60:02d}:{s % 60:02d}"
 
     async def on_position_changed(e: fta.AudioPositionChangeEvent):
+        nonlocal ultimo_guardado_pos
         pos_ms = e.position.in_milliseconds if hasattr(e.position, "in_milliseconds") else int(e.position or 0)
         if not arrastrando_slider and slider_progreso.max > 0:
             slider_progreso.value = min(pos_ms, slider_progreso.max)
             lbl_tiempo.value = f"{formatear_tiempo(pos_ms)} / {formatear_tiempo(slider_progreso.max)}"
+            ahora = time.monotonic()
+            if esta_reproduciendo and (ahora - ultimo_guardado_pos) >= 3.0:
+                ultimo_guardado_pos = ahora
+                page.run_task(guardar_estado_reproduccion, pos_ms)
             if not app_en_segundo_plano:
                 page.update()
+
     
     async def on_duration_changed(e: fta.AudioDurationChangeEvent):
         dur_ms = e.duration.in_milliseconds if hasattr(e.duration, "in_milliseconds") else int(e.duration or 0)
@@ -254,6 +282,7 @@ def main(page: ft.Page):
                 return
             esta_reproduciendo = False
             btn_play_pause.icon = ft.Icons.PLAY_ARROW
+            page.run_task(guardar_estado_reproduccion, slider_progreso.value)
             if not app_en_segundo_plano:
                 page.update()
             page.run_task(actualizar_notificacion_bloqueo)
@@ -327,9 +356,16 @@ def main(page: ft.Page):
 
             cambiando_pista = True
             ignorar_estados_hasta = time.monotonic() + 1.2
-            ruta_completa = os.path.join(ruta_actual, nombre)
+            # ruta_completa = os.path.join(ruta_actual, nombre)
+                        # Si estamos en Android compilado usa ruta absoluta; si estamos probando desde Windows, usa ruta relativa al assets_dir
+            if os.path.exists("/storage/emulated/0"):
+                ruta_completa = os.path.join(ruta_actual, nombre)
+            else:
+                ruta_completa = f"/{nombre}"
+
 
             try:
+                # if False and video_player: # ESTO PARA PROBAR EN WINDOWS
                 if video_player:
                     configurar_modo_visual_video(False)
                     try:
@@ -343,7 +379,7 @@ def main(page: ft.Page):
                         page.update()
                     await video_player.play()
                 else:
-                    await audio_player.stop()
+                    await audio_player.release()
                     audio_player.src = ruta_completa
                     audio_player.update()
                     await audio_player.play()
@@ -420,11 +456,14 @@ def main(page: ft.Page):
     async def on_slider_end(e):
         nonlocal arrastrando_slider
         arrastrando_slider = False
-        destino = ft.Duration(milliseconds=int(e.control.value))
+        ms_destino = int(e.control.value)
+        destino = ft.Duration(milliseconds=ms_destino)
+        page.run_task(guardar_estado_reproduccion, ms_destino)
         if video_player:
             await video_player.seek(destino)
         else:
             await audio_player.seek(destino)
+
 
 
     lyrics_buscadas = set()
@@ -1658,19 +1697,34 @@ def main(page: ft.Page):
         except Exception:
             pass
 
-        carpeta_guardada = await page.client_storage.get_async("ultima_carpeta")
+        carpeta_guardada = await prefs.get("ultima_carpeta")
         if carpeta_guardada and os.path.isdir(carpeta_guardada):
             establecer_carpeta(carpeta_guardada)
-            return
+            # return # ESTO ES PARA PROBAR EN WINDOWS 
 
         carpeta_music = os.path.join(raiz_storage, "Music")
         try:
             if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
                 establecer_carpeta(carpeta_music)
-                return
+                # return # ESTO ES PARA PROBAR EN WINDOWS
         except Exception:
             pass
         escanear_canciones()
+        
+        # Restaurar última canción y posición guardada
+        ultima_cancion = await prefs.get("ultima_cancion")
+        ultima_pos = await prefs.get("ultima_posicion_ms")
+        if ultima_cancion and ultima_cancion in canciones_locales:
+            idx_restaurar = canciones_locales.index(ultima_cancion)
+            pos_ms = int(ultima_pos or 0)
+            await reproducir_indice(idx_restaurar)
+            await asyncio.sleep(0.3)
+            if pos_ms > 0:
+                destino = ft.Duration(milliseconds=pos_ms)
+                if video_player:
+                    await video_player.seek(destino)
+                else:
+                    await audio_player.seek(destino)
 
 
 
@@ -1687,7 +1741,9 @@ def main(page: ft.Page):
 
 
 
-raiz_assets = "/storage/emulated/0" if os.path.exists("/storage/emulated/0") else os.path.abspath(".")
-ft.run(main)
+raiz_assets = "/storage/emulated/0" if os.path.exists("/storage/emulated/0") else os.path.abspath("descargas")
+os.makedirs(raiz_assets, exist_ok=True)
+ft.run(main, assets_dir=raiz_assets)
+
 
 
