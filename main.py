@@ -21,6 +21,7 @@ import ssl
 import time
 import re
 import json
+import random
 
 try:
     import certifi
@@ -266,7 +267,7 @@ def main(page: ft.Page):
         if e.state == fta.AudioState.COMPLETED:
             if cambiando_pista or ahora < ignorar_estados_hasta:
                 return
-            await siguiente_cancion(None)
+            await siguiente_cancion(None, auto=True)
         elif e.state == fta.AudioState.PLAYING:
             esta_reproduciendo = True
             btn_play_pause.icon = ft.Icons.PAUSE
@@ -426,18 +427,86 @@ def main(page: ft.Page):
             else:
                 await audio_player.play()
 
-    async def siguiente_cancion(e):
+    modo_aleatorio = False
+    modo_repetir = "all"  # Opciones: "all" (lista), "one" (una), "none" (no repetir)
+
+    def toggle_aleatorio(e=None):
+        nonlocal modo_aleatorio
+        modo_aleatorio = not modo_aleatorio
+        btn_aleatorio.icon_color = ft.Colors.AMBER_300 if modo_aleatorio else ft.Colors.GREY_500
+        btn_aleatorio.tooltip = "Aleatorio: Activado" if modo_aleatorio else "Aleatorio: Desactivado"
+        page.run_task(prefs.set, "modo_aleatorio", modo_aleatorio)
+        page.update()
+
+    def toggle_repetir(e=None):
+        nonlocal modo_repetir
+        ciclo = {"all": "one", "one": "none", "none": "all"}
+        modo_repetir = ciclo[modo_repetir]
+
+        if modo_repetir == "one":
+            btn_repetir.icon = ft.Icons.REPEAT_ONE_ROUNDED
+            btn_repetir.icon_color = ft.Colors.AMBER_300
+            btn_repetir.tooltip = "Repetir: Canción actual"
+        elif modo_repetir == "all":
+            btn_repetir.icon = ft.Icons.REPEAT_ROUNDED
+            btn_repetir.icon_color = ft.Colors.AMBER_300
+            btn_repetir.tooltip = "Repetir: Toda la lista"
+        else:
+            btn_repetir.icon = ft.Icons.REPEAT_ROUNDED
+            btn_repetir.icon_color = ft.Colors.GREY_500
+            btn_repetir.tooltip = "Repetir: Desactivado"
+
+        page.run_task(prefs.set, "modo_repetir", modo_repetir)
+        page.update()
+
+    btn_aleatorio = ft.IconButton(
+        icon=ft.Icons.SHUFFLE_ROUNDED,
+        icon_size=22,
+        icon_color=ft.Colors.GREY_500,
+        tooltip="Aleatorio: Desactivado",
+        on_click=toggle_aleatorio,
+    )
+
+    btn_repetir = ft.IconButton(
+        icon=ft.Icons.REPEAT_ROUNDED,
+        icon_size=22,
+        icon_color=ft.Colors.AMBER_300,
+        tooltip="Repetir: Toda la lista",
+        on_click=toggle_repetir,
+    )
+
+    async def siguiente_cancion(e, auto=False):
         nonlocal indice_video_yt
         if modo_video_yt and videos_yt_actuales:
-            siguiente_idx = (indice_video_yt + 1) % len(videos_yt_actuales)
+            if auto and modo_repetir == "one" and 0 <= indice_video_yt < len(videos_yt_actuales):
+                siguiente_idx = indice_video_yt
+            elif modo_aleatorio and len(videos_yt_actuales) > 1:
+                candidatos = [i for i in range(len(videos_yt_actuales)) if i != indice_video_yt]
+                siguiente_idx = random.choice(candidatos)
+            else:
+                siguiente_idx = (indice_video_yt + 1) % len(videos_yt_actuales)
             indice_video_yt = siguiente_idx
             v_url, titulo = videos_yt_actuales[indice_video_yt]
             await reproducir_video_youtube(v_url, titulo, idx_lista=indice_video_yt)
             return
 
         if canciones_locales:
-            base = indice_actual if 0 <= indice_actual < len(canciones_locales) else -1
-            await reproducir_indice((base + 1) % len(canciones_locales))
+            total = len(canciones_locales)
+            base = indice_actual if 0 <= indice_actual < total else -1
+
+            if auto and modo_repetir == "one" and base >= 0:
+                await reproducir_indice(base)
+                return
+
+            if modo_aleatorio and total > 1:
+                candidatos = [i for i in range(total) if i != base]
+                await reproducir_indice(random.choice(candidatos))
+                return
+
+            if auto and modo_repetir == "none" and (base + 1) >= total:
+                return
+
+            await reproducir_indice((base + 1) % total)
 
     async def anterior_cancion(e):
         nonlocal indice_video_yt
@@ -449,8 +518,14 @@ def main(page: ft.Page):
             return
 
         if canciones_locales:
-            base = indice_actual if 0 <= indice_actual < len(canciones_locales) else 0
-            await reproducir_indice((base - 1) % len(canciones_locales))
+            total = len(canciones_locales)
+            base = indice_actual if 0 <= indice_actual < total else 0
+            if modo_aleatorio and total > 1:
+                candidatos = [i for i in range(total) if i != base]
+                await reproducir_indice(random.choice(candidatos))
+            else:
+                await reproducir_indice((base - 1) % total)
+
 
 
 
@@ -1185,7 +1260,7 @@ def main(page: ft.Page):
             return
         ignorar_estados_hasta = ahora + 1.5  # Evita doble salto o bucle
         esta_reproduciendo = False
-        await siguiente_cancion(None)
+        await siguiente_cancion(None, auto=True)
 
 
     video_player = ftv.Video(
@@ -1801,16 +1876,17 @@ def main(page: ft.Page):
             ft.Row([ft.Container(content=lbl_cancion_actual, expand=True), lbl_tiempo]),
             slider_progreso,
             ft.Row([
-                ft.Container(width=40),
+                btn_aleatorio,
                 ft.Row([
                     ft.IconButton(icon=ft.Icons.SKIP_PREVIOUS_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(anterior_cancion, e)),
                     btn_play_pause,
                     ft.IconButton(icon=ft.Icons.SKIP_NEXT_ROUNDED, icon_size=32, on_click=lambda e: page.run_task(siguiente_cancion, e)),
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
-                btn_ver_lyrics,
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=12),
+                ft.Row([btn_repetir, btn_ver_lyrics], spacing=0, tight=True),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
         ], spacing=0)
     )
+
 
     async def inicializar_app():
         try:
@@ -1835,6 +1911,14 @@ def main(page: ft.Page):
         # except Exception:
             # pass
         # escanear_canciones()
+        nonlocal modo_aleatorio, modo_repetir
+        if await prefs.get("modo_aleatorio"):
+            toggle_aleatorio()
+        rep_guardado = await prefs.get("modo_repetir")
+        if rep_guardado in ("all", "one", "none") and rep_guardado != modo_repetir:
+            while modo_repetir != rep_guardado:
+                toggle_repetir()
+
         
         carpeta_guardada = await prefs.get("ultima_carpeta")
         carpeta_music = os.path.join(raiz_storage, "Music")
