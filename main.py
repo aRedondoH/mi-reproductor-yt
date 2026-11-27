@@ -278,7 +278,7 @@ def main(page: ft.Page):
                 page.update()
             page.run_task(actualizar_notificacion_bloqueo)
         elif e.state in (fta.AudioState.PAUSED, fta.AudioState.STOPPED):
-            if cambiando_pista or ahora < ignorar_estados_hasta:
+            if cambiando_pista or (e.state == fta.AudioState.STOPPED and ahora < ignorar_estados_hasta):
                 return
             esta_reproduciendo = False
             btn_play_pause.icon = ft.Icons.PLAY_ARROW
@@ -355,45 +355,37 @@ def main(page: ft.Page):
                 return
 
             cambiando_pista = True
-            ignorar_estados_hasta = time.monotonic() + 1.2
-            # ruta_completa = os.path.join(ruta_actual, nombre)
-                        # Si estamos en Android compilado usa ruta absoluta; si estamos probando desde Windows, usa ruta relativa al assets_dir
+            ignorar_estados_hasta = time.monotonic() + 0.4
             if os.path.exists("/storage/emulated/0"):
                 ruta_completa = os.path.join(ruta_actual, nombre)
             else:
                 ruta_completa = f"/{nombre}"
 
-
             try:
-                # if False and video_player: # ESTO PARA PROBAR EN WINDOWS
-                if video_player:
+                if video_player and modo_video_yt:
                     configurar_modo_visual_video(False)
                     try:
                         await video_player.pause()
+                        video_player.playlist = []
                     except Exception:
                         pass
-                    video_player.playlist = [ftv.VideoMedia(resource=ruta_completa)]
-                    esta_reproduciendo = True
-                    btn_play_pause.icon = ft.Icons.PAUSE
-                    if not app_en_segundo_plano:
-                        page.update()
-                    await video_player.play()
-                else:
-                    await audio_player.release()
-                    audio_player.src = ruta_completa
-                    audio_player.update()
-                    await audio_player.play()
-                    esta_reproduciendo = True
-                    btn_play_pause.icon = ft.Icons.PAUSE
-                    if not app_en_segundo_plano:
-                        page.update()
+
+                await audio_player.release()
+                audio_player.src = ruta_completa
+                audio_player.update()
+                await audio_player.play()
+                esta_reproduciendo = True
+                btn_play_pause.icon = ft.Icons.PAUSE
+                if not app_en_segundo_plano:
+                    page.update()
 
                 await actualizar_notificacion_bloqueo()
             finally:
-                await asyncio.sleep(0.35)
+                await asyncio.sleep(0.25)
                 if mi_token == token_reproduccion:
                     cambiando_pista = False
-                    ignorar_estados_hasta = time.monotonic() + 0.4
+                    ignorar_estados_hasta = time.monotonic() + 0.1
+
 
     async def toggle_play_pause(e):
         nonlocal esta_reproduciendo
@@ -402,7 +394,7 @@ def main(page: ft.Page):
                 await reproducir_indice(0)
             return
 
-        if video_player:
+        if video_player and modo_video_yt:
             if esta_reproduciendo:
                 await video_player.pause()
                 esta_reproduciendo = False
@@ -459,10 +451,11 @@ def main(page: ft.Page):
         ms_destino = int(e.control.value)
         destino = ft.Duration(milliseconds=ms_destino)
         page.run_task(guardar_estado_reproduccion, ms_destino)
-        if video_player:
+        if video_player and modo_video_yt:
             await video_player.seek(destino)
         else:
             await audio_player.seek(destino)
+
 
 
 
@@ -1290,6 +1283,10 @@ def main(page: ft.Page):
             lbl_video_mini.value = titulo_real
 
             if video_player:
+                try:
+                    await audio_player.pause()
+                except Exception:
+                    pass
                 await video_player.pause()
                 configurar_modo_visual_video(True)
                 video_player.playlist = [ftv.VideoMedia(resource=stream_url, http_headers=headers)]
@@ -1312,7 +1309,7 @@ def main(page: ft.Page):
         nonlocal app_en_segundo_plano
         if e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE, ft.AppLifecycleState.INACTIVE):
             app_en_segundo_plano = True
-            if video_player and esta_reproduciendo:
+            if video_player and modo_video_yt and esta_reproduciendo:
                 await asyncio.sleep(0.2)
                 try:
                     await video_player.play()
@@ -1697,19 +1694,30 @@ def main(page: ft.Page):
         except Exception:
             pass
 
+        # carpeta_guardada = await prefs.get("ultima_carpeta")
+        # if carpeta_guardada and os.path.isdir(carpeta_guardada):
+            # establecer_carpeta(carpeta_guardada)
+            # # return # ESTO ES PARA PROBAR EN WINDOWS 
+
+        # carpeta_music = os.path.join(raiz_storage, "Music")
+        # try:
+            # if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
+                # establecer_carpeta(carpeta_music)
+                # # return # ESTO ES PARA PROBAR EN WINDOWS
+        # except Exception:
+            # pass
+        # escanear_canciones()
+        
         carpeta_guardada = await prefs.get("ultima_carpeta")
+        carpeta_music = os.path.join(raiz_storage, "Music")
+
         if carpeta_guardada and os.path.isdir(carpeta_guardada):
             establecer_carpeta(carpeta_guardada)
-            # return # ESTO ES PARA PROBAR EN WINDOWS 
+        elif os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
+            establecer_carpeta(carpeta_music)
+        else:
+            escanear_canciones()
 
-        carpeta_music = os.path.join(raiz_storage, "Music")
-        try:
-            if os.path.isdir(carpeta_music) and os.listdir(carpeta_music):
-                establecer_carpeta(carpeta_music)
-                # return # ESTO ES PARA PROBAR EN WINDOWS
-        except Exception:
-            pass
-        escanear_canciones()
         
         # Restaurar última canción y posición guardada
         ultima_cancion = await prefs.get("ultima_cancion")
@@ -1721,10 +1729,11 @@ def main(page: ft.Page):
             await asyncio.sleep(0.3)
             if pos_ms > 0:
                 destino = ft.Duration(milliseconds=pos_ms)
-                if video_player:
+                if video_player and modo_video_yt:
                     await video_player.seek(destino)
                 else:
                     await audio_player.seek(destino)
+
 
 
 
