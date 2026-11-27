@@ -68,7 +68,7 @@ def main(page: ft.Page):
     async def manejar_accion_notificacion(e: ftn.NotificationActionEvent):
         nonlocal ultimo_clic_notif
         ahora = time.monotonic()
-        if ahora - ultimo_clic_notif < 0.35:
+        if ahora - ultimo_clic_notif < 0.12:
             return
         ultimo_clic_notif = ahora
 
@@ -320,18 +320,19 @@ def main(page: ft.Page):
     indice_video_yt = -1
     reproduccion_lock = asyncio.Lock()
     token_reproduccion = 0
-
     modo_video_yt = False
 
-    async def reproducir_indice(idx):
-        nonlocal indice_actual, cambiando_pista, ignorar_estados_hasta, titulo_stream_actual, token_reproduccion, esta_reproduciendo
-        if not canciones_locales or idx < 0 or idx >= len(canciones_locales):
+    async def reproducir_indice(indice):
+        nonlocal indice_actual, esta_reproduciendo, cambiando_pista, ignorar_estados_hasta, token_reproduccion, titulo_stream_actual
+
+        if not canciones_locales or indice < 0 or indice >= len(canciones_locales):
             return
 
+        # 1. Actualizamos índice y UI al instante (aunque pulses 3 veces rápido)
         token_reproduccion += 1
         mi_token = token_reproduccion
         anterior_idx = indice_actual
-        indice_actual = idx
+        indice_actual = indice
         titulo_stream_actual = None
 
         nombre = canciones_locales[indice_actual]
@@ -350,16 +351,19 @@ def main(page: ft.Page):
                         tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
             page.update()
 
+        # 2. Esperamos 180ms: si pulsaste otra vez rápido, este intento se cancela solo
+        await asyncio.sleep(0.18)
+        if mi_token != token_reproduccion:
+            return
+
+        # 3. Solo la última pulsación entra al motor de audio
         async with reproduccion_lock:
             if mi_token != token_reproduccion:
                 return
 
             cambiando_pista = True
-            ignorar_estados_hasta = time.monotonic() + 0.4
-            if os.path.exists("/storage/emulated/0"):
-                ruta_completa = os.path.join(ruta_actual, nombre)
-            else:
-                ruta_completa = f"/{nombre}"
+            ignorar_estados_hasta = time.monotonic() + 0.5
+            ruta_completa = os.path.join(ruta_actual, nombre) if os.path.exists("/storage/emulated/0") else f"/{nombre}"
 
             try:
                 if video_player and modo_video_yt:
@@ -370,10 +374,21 @@ def main(page: ft.Page):
                     except Exception:
                         pass
 
-                await audio_player.release()
+                try:
+                    await audio_player.release()
+                except Exception:
+                    pass
+
+                await asyncio.sleep(0.05)
+                if mi_token != token_reproduccion:
+                    return
+
                 audio_player.src = ruta_completa
-                audio_player.update()
+                if not app_en_segundo_plano:
+                    audio_player.update()
                 await audio_player.play()
+
+
                 esta_reproduciendo = True
                 btn_play_pause.icon = ft.Icons.PAUSE
                 if not app_en_segundo_plano:
@@ -381,10 +396,11 @@ def main(page: ft.Page):
 
                 await actualizar_notificacion_bloqueo()
             finally:
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.2)
                 if mi_token == token_reproduccion:
                     cambiando_pista = False
                     ignorar_estados_hasta = time.monotonic() + 0.1
+
 
 
     async def toggle_play_pause(e):
