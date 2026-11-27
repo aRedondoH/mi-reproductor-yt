@@ -360,26 +360,27 @@ def main(page: ft.Page):
             ruta_completa = os.path.join(ruta_actual, nombre) if os.path.exists("/storage/emulated/0") else f"/{nombre}"
 
             try:
-                if video_player and modo_video_yt:
+                if video_player:
                     configurar_modo_visual_video(False)
                     try:
                         await video_player.pause()
-                        video_player.playlist = []
                     except Exception:
                         pass
 
-                audio_player.src = ruta_completa
-                audio_player.update()
-                await asyncio.sleep(0.05)
-
-                if mi_token != token_reproduccion:
-                    return
-
-                await audio_player.play()
-
-                esta_reproduciendo = True
-                btn_play_pause.icon = ft.Icons.PAUSE
-                if not app_en_segundo_plano:
+                    video_player.playlist = [ftv.VideoMedia(resource=ruta_completa)]
+                    esta_reproduciendo = True
+                    btn_play_pause.icon = ft.Icons.PAUSE
+                    page.update()
+                    await video_player.play()
+                else:
+                    audio_player.src = ruta_completa
+                    audio_player.update()
+                    await asyncio.sleep(0.05)
+                    if mi_token != token_reproduccion:
+                        return
+                    await audio_player.play()
+                    esta_reproduciendo = True
+                    btn_play_pause.icon = ft.Icons.PAUSE
                     page.update()
 
                 await actualizar_notificacion_bloqueo()
@@ -387,7 +388,8 @@ def main(page: ft.Page):
                 await asyncio.sleep(0.25)
                 if mi_token == token_reproduccion:
                     cambiando_pista = False
-                    ignorar_estados_hasta = time.monotonic() + 0.6
+                    ignorar_estados_hasta = time.monotonic() + 0.5
+
 
 
 
@@ -398,8 +400,7 @@ def main(page: ft.Page):
             if canciones_locales:
                 await reproducir_indice(0)
             return
-
-        if video_player and modo_video_yt:
+        if video_player:
             if esta_reproduciendo:
                 await video_player.pause()
                 esta_reproduciendo = False
@@ -456,7 +457,7 @@ def main(page: ft.Page):
         ms_destino = int(e.control.value)
         destino = ft.Duration(milliseconds=ms_destino)
         page.run_task(guardar_estado_reproduccion, ms_destino)
-        if video_player and modo_video_yt:
+        if video_player:
             await video_player.seek(destino)
         else:
             await audio_player.seek(destino)
@@ -1136,14 +1137,20 @@ def main(page: ft.Page):
     lista_resultados_yt = ft.ListView(expand=True, spacing=6)
 
     async def on_video_position_change(e):
+        nonlocal ultimo_guardado_pos
         pos_ms = e.data.in_milliseconds if hasattr(e.data, "in_milliseconds") else int(e.data or 0)
         if not arrastrando_slider and slider_progreso.max > 0:
             slider_progreso.value = min(pos_ms, slider_progreso.max)
             lbl_tiempo.value = f"{formatear_tiempo(pos_ms)} / {formatear_tiempo(slider_progreso.max)}"
+            ahora = time.monotonic()
+            if esta_reproduciendo and not modo_video_yt and (ahora - ultimo_guardado_pos) >= 3.0:
+                ultimo_guardado_pos = ahora
+                page.run_task(guardar_estado_reproduccion, pos_ms)
             if panel_lyrics_abierto and lineas_lrc_actuales:
                 actualizar_resaltado_lyrics(pos_ms)
             if not app_en_segundo_plano:
                 page.update()
+
 
     async def on_video_duration_change(e):
         dur_ms = e.data.in_milliseconds if hasattr(e.data, "in_milliseconds") else int(e.data or 0)
@@ -1314,7 +1321,7 @@ def main(page: ft.Page):
         nonlocal app_en_segundo_plano
         if e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE, ft.AppLifecycleState.INACTIVE):
             app_en_segundo_plano = True
-            if video_player and modo_video_yt and esta_reproduciendo:
+            if video_player and esta_reproduciendo:
                 await asyncio.sleep(0.2)
                 try:
                     await video_player.play()
@@ -1326,6 +1333,7 @@ def main(page: ft.Page):
                 page.update()
             except Exception:
                 pass
+
 
     page.on_app_lifecycle_state_change = on_lifecycle_change
 
@@ -1734,7 +1742,7 @@ def main(page: ft.Page):
             await asyncio.sleep(0.3)
             if pos_ms > 0:
                 destino = ft.Duration(milliseconds=pos_ms)
-                if video_player and modo_video_yt:
+                if video_player:
                     await video_player.seek(destino)
                 else:
                     await audio_player.seek(destino)
