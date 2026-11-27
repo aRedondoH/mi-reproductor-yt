@@ -318,6 +318,7 @@ def main(page: ft.Page):
     reproduccion_lock = asyncio.Lock()
     token_reproduccion = 0
     modo_video_yt = False
+    playlist_local_cargada = False
 
     async def reproducir_indice(indice):
         nonlocal indice_actual, esta_reproduciendo, cambiando_pista, ignorar_estados_hasta, token_reproduccion, titulo_stream_actual
@@ -355,6 +356,7 @@ def main(page: ft.Page):
             if mi_token != token_reproduccion:
                 return
 
+            nonlocal playlist_local_cargada
             cambiando_pista = True
             ignorar_estados_hasta = time.monotonic() + 1.2
             ruta_completa = os.path.join(ruta_actual, nombre) if os.path.exists("/storage/emulated/0") else f"/{nombre}"
@@ -362,16 +364,21 @@ def main(page: ft.Page):
             try:
                 if video_player:
                     configurar_modo_visual_video(False)
-                    try:
-                        await video_player.pause()
-                    except Exception:
-                        pass
+                    if not playlist_local_cargada:
+                        video_player.playlist = [
+                            ftv.VideoMedia(resource=os.path.join(ruta_actual, f))
+                            for f in canciones_locales
+                        ]
+                        playlist_local_cargada = True
+                        video_player.update()
+                        await asyncio.sleep(0.1)
 
-                    video_player.playlist = [ftv.VideoMedia(resource=ruta_completa)]
+                    await video_player.jump_to(indice_actual)
+                    await video_player.play()
                     esta_reproduciendo = True
                     btn_play_pause.icon = ft.Icons.PAUSE
-                    page.update()
-                    await video_player.play()
+                    if not app_en_segundo_plano:
+                        page.update()
                 else:
                     audio_player.src = ruta_completa
                     audio_player.update()
@@ -381,7 +388,8 @@ def main(page: ft.Page):
                     await audio_player.play()
                     esta_reproduciendo = True
                     btn_play_pause.icon = ft.Icons.PAUSE
-                    page.update()
+                    if not app_en_segundo_plano:
+                        page.update()
 
                 await actualizar_notificacion_bloqueo()
             finally:
@@ -389,6 +397,7 @@ def main(page: ft.Page):
                 if mi_token == token_reproduccion:
                     cambiando_pista = False
                     ignorar_estados_hasta = time.monotonic() + 0.5
+
 
 
 
@@ -650,9 +659,18 @@ def main(page: ft.Page):
             return
 
         
+        nonlocal playlist_local_cargada
+        playlist_local_cargada = False
         if indice_actual >= len(canciones_locales):
             indice_actual = -1
+        if video_player and canciones_locales and not modo_video_yt:
+            video_player.playlist = [
+                ftv.VideoMedia(resource=os.path.join(ruta_actual, f))
+                for f in canciones_locales
+            ]
+            playlist_local_cargada = True
         actualizar_lista_ui()
+
 
 
 
@@ -1295,6 +1313,8 @@ def main(page: ft.Page):
             lbl_video_mini.value = titulo_real
 
             if video_player:
+                nonlocal playlist_local_cargada
+                playlist_local_cargada = False
                 try:
                     await audio_player.pause()
                 except Exception:
@@ -1302,6 +1322,11 @@ def main(page: ft.Page):
                 await video_player.pause()
                 configurar_modo_visual_video(True)
                 video_player.playlist = [ftv.VideoMedia(resource=stream_url, http_headers=headers)]
+                video_player.update()
+                await asyncio.sleep(0.05)
+                await video_player.jump_to(0)
+
+                
                 esta_reproduciendo = True
                 btn_play_pause.icon = ft.Icons.PAUSE
                 page.update()
