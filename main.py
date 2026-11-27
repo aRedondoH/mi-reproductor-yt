@@ -1655,6 +1655,366 @@ def main(page: ft.Page):
         ),
     )
 
+    lista_radios_ui = ft.ListView(expand=True, spacing=4, padding=10)
+    radio_actual_url = None
+    radio_actual_nombre = ""
+    lbl_estado_radio = ft.Text("Selecciona una emisora para escuchar", size=12, color=ft.Colors.GREY_400)
+
+    txt_buscar_radio = ft.TextField(
+        hint_text="Buscar emisora (ej. Rock FM, Los 40, SER...)",
+        expand=True,
+        height=44,
+        text_size=14,
+        border=ft.OutlineInputBorder(border_radius=10),
+        on_submit=lambda e: page.run_task(cargar_radios, txt_buscar_radio.value),
+    )
+
+    async def reproducir_radio(nombre, stream_url):
+        nonlocal modo_video_yt, indice_actual, esta_reproduciendo, playlist_local_cargada
+        nonlocal radio_actual_url, radio_actual_nombre
+        indice_actual = -1
+        playlist_local_cargada = False
+        radio_actual_url = stream_url
+        radio_actual_nombre = nombre
+
+        if modo_video_yt:
+            await cerrar_reproductor_video()
+
+        lbl_cancion_actual.value = f"📻 {nombre}"
+        lbl_estado_radio.value = f"Sonando: {nombre}"
+        lbl_tiempo.value = "EN DIRECTO"
+        slider_progreso.value = 0
+        slider_progreso.max = 100
+        esta_reproduciendo = True
+        btn_play_pause.icon = ft.Icons.PAUSE
+        page.update()
+
+        if video_player:
+            configurar_modo_visual_video(False)
+            video_player.playlist = [ftv.VideoMedia(resource=stream_url)]
+            video_player.update()
+            await asyncio.sleep(0.05)
+            await video_player.jump_to(0)
+            await video_player.play()
+        else:
+            audio_player.src = stream_url
+            audio_player.update()
+            await audio_player.play()
+
+        await actualizar_notificacion_bloqueo(titulo_custom=f"📻 {nombre}")
+
+    async def configurar_token_audd(e=None):
+        token_actual = await prefs.get("audd_api_token") or ""
+        txt_token = ft.TextField(
+            value=token_actual,
+            label="Token gratuito de AudD (opcional)",
+            hint_text="Pega tu api_token de dashboard.audd.io",
+            text_size=13,
+        )
+
+        def _cerrar(dlg):
+            dlg.open = False
+            page.update()
+
+        def _guardar(ev):
+            val = txt_token.value.strip()
+            page.run_task(prefs.set, "audd_api_token", val)
+            lbl_estado_radio.value = "Token guardado." if val else "Usando modo prueba."
+            _cerrar(dlg_tok)
+
+        dlg_tok = ft.AlertDialog(
+            title=ft.Text("Ajustes de reconocimiento", weight=ft.FontWeight.BOLD),
+            content=ft.Column(
+                tight=True,
+                spacing=8,
+                controls=[
+                    ft.Text(
+                        "Usa el modo prueba gratis. Si se agota el límite diario, "
+                        "obtén 300 búsquedas gratis/mes en dashboard.audd.io.",
+                        size=12,
+                        color=ft.Colors.GREY_400,
+                    ),
+                    txt_token,
+                ],
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _: _cerrar(dlg_tok)),
+                ft.Button("Guardar", on_click=_guardar),
+            ],
+        )
+        try:
+            page.show_dialog(dlg_tok)
+        except AttributeError:
+            page.overlay.append(dlg_tok)
+            dlg_tok.open = True
+            page.update()
+
+    async def cargar_radios(filtro=""):
+        lista_radios_ui.controls = [
+            ft.Container(
+                padding=20,
+                alignment=ft.Alignment.CENTER,
+                content=ft.ProgressRing(color=ft.Colors.AMBER_300),
+            )
+        ]
+        page.update()
+
+        def _fetch_radios():
+            params = {
+                "hidebroken": "true",
+                "order": "clickcount",
+                "reverse": "true",
+                "limit": "35",
+            }
+            if filtro and filtro.strip():
+                params["name"] = filtro.strip()
+            else:
+                params["countrycode"] = "ES"
+
+            query_str = urllib.parse.urlencode(params)
+            servidores = [
+                "de1.api.radio-browser.info",
+                "fi1.api.radio-browser.info",
+                "at1.api.radio-browser.info",
+            ]
+            ctx = ssl._create_unverified_context()
+
+            for host in servidores:
+                try:
+                    url = f"https://{host}/json/stations/search?{query_str}"
+                    req = urllib.request.Request(
+                        url,
+                        headers={"User-Agent": "ARPlayer/1.0", "Accept": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                        raw = resp.read().decode("utf-8", errors="ignore").strip()
+                        if raw:
+                            return json.loads(raw)
+                except Exception:
+                    continue
+            raise RuntimeError("No se pudo conectar con los servidores de radio")
+
+        try:
+            emisoras = await asyncio.to_thread(_fetch_radios)
+            items = []
+            for st in emisoras:
+                nombre = (st.get("name") or "Emisora").strip()
+                stream = st.get("url_resolved") or st.get("url")
+                tags = (st.get("tags") or "")[:40]
+                if not stream:
+                    continue
+                items.append(
+                    ft.ListTile(
+                        leading=ft.Icon(ft.Icons.RADIO, color=ft.Colors.RED_400),
+                        title=ft.Text(nombre, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                        subtitle=ft.Text(tags if tags else "Emisión en directo", size=12, color=ft.Colors.GREY_400),
+                        trailing=ft.Icon(ft.Icons.PLAY_ARROW_ROUNDED, color=ft.Colors.AMBER_300),
+                        on_click=lambda e, n=nombre, u=stream: page.run_task(reproducir_radio, n, u),
+                    )
+                )
+            lista_radios_ui.controls = items if items else [ft.Text("No se encontraron emisoras.", color=ft.Colors.GREY_400)]
+        except Exception as ex:
+            lista_radios_ui.controls = [ft.Text(f"Error cargando emisoras: {ex}", color=ft.Colors.RED_400)]
+        page.update()
+
+    async def detectar_cancion_radio(e=None):
+        if not radio_actual_url:
+            lbl_estado_radio.value = "⚠ Primero pon una emisora de radio."
+            page.update()
+            return
+
+        token_audd = (await prefs.get("audd_api_token")) or "test"
+        lbl_estado_radio.value = "🎧 Escuchando 4 segundos de la radio..."
+        page.update()
+
+        def _reconocer_estilo_shazam(url_stream, api_token):
+            import uuid
+            ctx = ssl._create_unverified_context()
+
+            # 1. Intento rápido por metadatos ICY
+            try:
+                req_icy = urllib.request.Request(
+                    url_stream,
+                    headers={"Icy-MetaData": "1", "User-Agent": "ARPlayer/1.0"},
+                )
+                with urllib.request.urlopen(req_icy, timeout=5, context=ctx) as resp:
+                    metaint_str = resp.headers.get("icy-metaint")
+                    if metaint_str:
+                        metaint = int(metaint_str)
+                        leidos = 0
+                        while leidos < metaint:
+                            trozo = resp.read(metaint - leidos)
+                            if not trozo:
+                                break
+                            leidos += len(trozo)
+                        largo_byte = resp.read(1)
+                        if largo_byte:
+                            meta_len = ord(largo_byte) * 16
+                            if meta_len > 0:
+                                meta_raw = resp.read(meta_len).decode("utf-8", errors="ignore")
+                                m = re.search(r"StreamTitle='(.*?)';", meta_raw)
+                                titulo_icy = m.group(1).strip() if m else ""
+                                if titulo_icy and " - " in titulo_icy:
+                                    return titulo_icy, "Metadatos en directo"
+            except Exception:
+                pass
+
+            # 2. Huella acústica estilo Shazam (4.5s de audio)
+            req_audio = urllib.request.Request(
+                url_stream,
+                headers={"User-Agent": "ARPlayer/1.0"},
+            )
+            buffer_audio = bytearray()
+            inicio = time.monotonic()
+            with urllib.request.urlopen(req_audio, timeout=8, context=ctx) as resp:
+                while (time.monotonic() - inicio) < 4.5 and len(buffer_audio) < 160000:
+                    bloque = resp.read(8192)
+                    if not bloque:
+                        break
+                    buffer_audio.extend(bloque)
+
+            if len(buffer_audio) < 16000:
+                return None, "No se pudo capturar suficiente audio."
+
+            boundary = f"----ARPlayerBoundary{uuid.uuid4().hex}"
+            cuerpo = bytearray()
+            cuerpo.extend(f"--{boundary}\r\n".encode())
+            cuerpo.extend(b'Content-Disposition: form-data; name="api_token"\r\n\r\n')
+            cuerpo.extend(f"{api_token}\r\n".encode())
+
+            cuerpo.extend(f"--{boundary}\r\n".encode())
+            cuerpo.extend(b'Content-Disposition: form-data; name="file"; filename="clip.mp3"\r\n')
+            cuerpo.extend(b"Content-Type: audio/mpeg\r\n\r\n")
+            cuerpo.extend(buffer_audio)
+            cuerpo.extend(f"\r\n--{boundary}--\r\n".encode())
+
+            req_api = urllib.request.Request(
+                "https://audd.io",
+                data=bytes(cuerpo),
+                headers={
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "User-Agent": "ARPlayer/1.0",
+                },
+            )
+            with urllib.request.urlopen(req_api, timeout=15, context=ctx) as resp_api:
+                datos = json.loads(resp_api.read().decode("utf-8", errors="ignore"))
+
+            if datos.get("status") == "success" and datos.get("result"):
+                res = datos["result"]
+                artista = (res.get("artist") or "").strip()
+                titulo = (res.get("title") or "").strip()
+                return f"{artista} - {titulo}".strip(" -"), "Huella acústica (Shazam)"
+
+            if datos.get("status") == "error":
+                err_msg = (datos.get("error") or {}).get("error_message", "Error API")
+                return None, f"Límite alcanzado ({err_msg}). Configura tu token en 🔑."
+
+            return None, "No se reconoció (puede haber locutor o anuncios)."
+
+        try:
+            cancion, origen = await asyncio.to_thread(_reconocer_estilo_shazam, radio_actual_url, token_audd)
+        except Exception as ex:
+            cancion, origen = None, f"Error de conexión: {str(ex)[:50]}"
+
+        if not cancion:
+            lbl_estado_radio.value = origen
+            page.update()
+            return
+
+        lbl_estado_radio.value = f"🎵 {cancion}"
+        txt_titulo_detectado = ft.TextField(
+            value=cancion,
+            label="Canción identificada",
+            text_size=14,
+        )
+
+        def _cerrar_dlg(dlg):
+            dlg.open = False
+            page.update()
+
+        def _accion_descargar(ev):
+            q = txt_titulo_detectado.value.strip()
+            _cerrar_dlg(dlg_detectada)
+            if q:
+                iniciar_descarga_desde_busqueda(f"ytsearch1:{q}", 1)
+
+        def _accion_buscar(ev):
+            q = txt_titulo_detectado.value.strip()
+            _cerrar_dlg(dlg_detectada)
+            if q:
+                busqueda_input.value = q
+                tabs.selected_index = 1
+                buscar_youtube_click()
+
+        dlg_detectada = ft.AlertDialog(
+            title=ft.Text("¡Canción identificada!", weight=ft.FontWeight.BOLD),
+            content=ft.Column(
+                tight=True,
+                spacing=10,
+                controls=[
+                    ft.Text(f"Emisora: {radio_actual_nombre} • {origen}", size=12, color=ft.Colors.GREY_400),
+                    txt_titulo_detectado,
+                ],
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda _: _cerrar_dlg(dlg_detectada)),
+                ft.TextButton("Buscar en YT", on_click=_accion_buscar),
+                ft.Button("Descargar (.m4a)", icon=ft.Icons.DOWNLOAD, on_click=_accion_descargar),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        try:
+            page.show_dialog(dlg_detectada)
+        except AttributeError:
+            page.overlay.append(dlg_detectada)
+            dlg_detectada.open = True
+            page.update()
+
+    vista_radio = ft.Column(
+        expand=True,
+        controls=[
+            ft.Container(
+                padding=ft.Padding.only(left=10, right=10, top=10, bottom=4),
+                content=ft.Column(
+                    spacing=6,
+                    controls=[
+                        ft.Row(
+                            spacing=6,
+                            controls=[
+                                txt_buscar_radio,
+                                ft.IconButton(
+                                    icon=ft.Icons.SEARCH,
+                                    bgcolor=ft.Colors.AMBER_300,
+                                    icon_color=ft.Colors.BLACK,
+                                    tooltip="Buscar emisora",
+                                    on_click=lambda e: page.run_task(cargar_radios, txt_buscar_radio.value),
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.GRAPHIC_EQ_ROUNDED,
+                                    bgcolor=ft.Colors.BLUE_600,
+                                    icon_color=ft.Colors.WHITE,
+                                    tooltip="Identificar canción (estilo Shazam)",
+                                    on_click=lambda e: page.run_task(detectar_cancion_radio, e),
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.VPN_KEY_OUTLINED,
+                                    icon_size=18,
+                                    tooltip="Configurar token AudD",
+                                    on_click=lambda e: page.run_task(configurar_token_audd, e),
+                                ),
+                            ],
+                        ),
+                        lbl_estado_radio,
+                    ],
+                ),
+            ),
+            lista_radios_ui,
+        ],
+    )
+
+
+
     logo_ar_player = ft.Container(
         padding=ft.Padding.symmetric(horizontal=6, vertical=2),
         margin=ft.Margin.only(right=10, left=4),
@@ -1705,11 +2065,9 @@ def main(page: ft.Page):
 
 
 
-
-
     tabs = ft.Tabs(
         selected_index=0,
-        length=3,
+        length=4,
         expand=True,
         content=ft.Column(
             expand=True,
@@ -1724,6 +2082,7 @@ def main(page: ft.Page):
                                 ft.Tab(label="Mi Música", icon=ft.Icons.LIBRARY_MUSIC),
                                 ft.Tab(label="Buscar", icon=ft.Icons.SEARCH),
                                 ft.Tab(label="Descargar", icon=ft.Icons.CLOUD_DOWNLOAD),
+                                ft.Tab(label="Radio", icon=ft.Icons.RADIO),
                             ],
                         ),
                         logo_ar_player,
@@ -1735,11 +2094,13 @@ def main(page: ft.Page):
                         vista_biblioteca,
                         vista_buscador,
                         vista_descargador,
+                        vista_radio,
                     ],
                 ),
             ],
         ),
     )
+
 
 
 
@@ -1929,6 +2290,8 @@ def main(page: ft.Page):
             establecer_carpeta(carpeta_music)
         else:
             escanear_canciones()
+            
+        page.run_task(cargar_radios)
 
         
         # Restaurar última canción y posición guardada
