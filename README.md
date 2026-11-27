@@ -5,10 +5,12 @@
 ---
 
 ## 📲 Descargar para Android
-
-Puedes descargar la última versión estable directamente en tu teléfono sin necesidad de tener cuenta en GitHub:
+Obtén la última versión estable directamente en tu móvil sin necesitar cuenta en GitHub:
 
 [![Descargar APK](https://shields.io)](https://github.com)
+
+*(También puedes abrir la [página de la versión v1.0.0](https://github.com/aRedondoH/mi-reproductor-yt/releases/tag/v1.0.0) para elegir el archivo).*
+
 
 ### Cómo instalarla
 1. Pulsa el botón verde **Descargar APK** (la descarga empezará al instante).
