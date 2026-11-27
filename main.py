@@ -40,7 +40,7 @@ except ImportError:
 from concurrent.futures import ThreadPoolExecutor
 
 def main(page: ft.Page):
-    page.title = "Descargador Paralelo"
+    page.title = "AR Player"
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 0
@@ -1551,6 +1551,87 @@ def main(page: ft.Page):
     )
 
 
+    cruz_trinitaria = ft.Container(
+        width=18,
+        height=18,
+        bgcolor=ft.Colors.WHITE,
+        border_radius=3,
+        content=ft.Stack(
+            controls=[
+                # Brazo horizontal (Azul)
+                ft.Container(
+                    width=14,
+                    height=4,
+                    left=2,
+                    top=7,
+                    bgcolor=ft.Colors.BLUE_700,
+                    border_radius=1,
+                ),
+                # Brazo vertical superpuesto (Rojo)
+                ft.Container(
+                    width=4,
+                    height=14,
+                    left=7,
+                    top=2,
+                    bgcolor=ft.Colors.RED_700,
+                    border_radius=1,
+                ),
+            ]
+        ),
+    )
+
+    logo_ar_player = ft.Container(
+        padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+        margin=ft.Margin.only(right=10, left=4),
+        content=ft.Column(
+            spacing=2,
+            tight=True,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[
+                ft.Text(
+                    size=21,
+                    spans=[
+                        ft.TextSpan(
+                            "A",
+                            style=ft.TextStyle(
+                                weight=ft.FontWeight.W_900,
+                                color=ft.Colors.RED_600,
+                                letter_spacing=-1.5,
+                            ),
+                        ),
+                        ft.TextSpan(
+                            "R",
+                            style=ft.TextStyle(
+                                weight=ft.FontWeight.W_900,
+                                color=ft.Colors.BLUE_500,
+                            ),
+                        ),
+                    ],
+                ),
+                ft.Container(
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=1),
+                    bgcolor=ft.Colors.WHITE,
+                    border_radius=3,
+                    content=ft.Text(
+                        "PLAYER",
+                        size=7,
+                        weight=ft.FontWeight.W_900,
+                        color=ft.Colors.BLACK,
+                        style=ft.TextStyle(letter_spacing=2.2),
+                    ),
+                ),
+            ],
+        ),
+    )
+
+
+
+
+
+
+
+
+
     tabs = ft.Tabs(
         selected_index=0,
         length=3,
@@ -1558,12 +1639,20 @@ def main(page: ft.Page):
         content=ft.Column(
             expand=True,
             controls=[
-                ft.TabBar(
-                    tabs=[
-                        ft.Tab(label="Mi Música", icon=ft.Icons.LIBRARY_MUSIC),
-                        ft.Tab(label="Buscar", icon=ft.Icons.SEARCH),
-                        ft.Tab(label="Descargar", icon=ft.Icons.CLOUD_DOWNLOAD),
-                    ]
+                ft.Row(
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.TabBar(
+                            expand=True,
+                            scrollable=True,
+                            tabs=[
+                                ft.Tab(label="Mi Música", icon=ft.Icons.LIBRARY_MUSIC),
+                                ft.Tab(label="Buscar", icon=ft.Icons.SEARCH),
+                                ft.Tab(label="Descargar", icon=ft.Icons.CLOUD_DOWNLOAD),
+                            ],
+                        ),
+                        logo_ar_player,
+                    ],
                 ),
                 ft.TabBarView(
                     expand=True,
@@ -1576,6 +1665,7 @@ def main(page: ft.Page):
             ],
         ),
     )
+
 
 
 
