@@ -68,23 +68,17 @@ def main(page: ft.Page):
     async def manejar_accion_notificacion(e: ftn.NotificationActionEvent):
         nonlocal ultimo_clic_notif
         ahora = time.monotonic()
-        if ahora - ultimo_clic_notif < 0.12:
+        if ahora - ultimo_clic_notif < 0.15:
             return
         ultimo_clic_notif = ahora
 
-        # ESTO ES PARA PROBARLO EN WINDOWS CON WEB
-        # if e.action_id == "prev":
-            # await anterior_cancion(None)
-        # elif e.action_id == "play_pause":
-            # await toggle_play_pause(None)
-        # elif e.action_id == "next":
-            # await siguiente_cancion(None)
         if e.action_id == "prev":
-            await anterior_cancion(None)
+            page.run_task(anterior_cancion, None)
         elif e.action_id == "play_pause":
-            await toggle_play_pause(None)
+            page.run_task(toggle_play_pause, None)
         elif e.action_id == "next":
-            await siguiente_cancion(None)
+            page.run_task(siguiente_cancion, None)
+
 
 
 
@@ -259,7 +253,9 @@ def main(page: ft.Page):
         if dur_ms > 0:
             slider_progreso.max = dur_ms
             lbl_tiempo.value = f"{formatear_tiempo(slider_progreso.value)} / {formatear_tiempo(dur_ms)}"
-            page.update()        
+            if not app_en_segundo_plano:
+                page.update()
+       
 
     cambiando_pista = False
     ignorar_estados_hasta = 0.0
@@ -278,7 +274,7 @@ def main(page: ft.Page):
                 page.update()
             page.run_task(actualizar_notificacion_bloqueo)
         elif e.state in (fta.AudioState.PAUSED, fta.AudioState.STOPPED):
-            if cambiando_pista or (e.state == fta.AudioState.STOPPED and ahora < ignorar_estados_hasta):
+            if cambiando_pista or ahora < ignorar_estados_hasta:
                 return
             esta_reproduciendo = False
             btn_play_pause.icon = ft.Icons.PLAY_ARROW
@@ -286,6 +282,7 @@ def main(page: ft.Page):
             if not app_en_segundo_plano:
                 page.update()
             page.run_task(actualizar_notificacion_bloqueo)
+
 
 
 
@@ -328,7 +325,6 @@ def main(page: ft.Page):
         if not canciones_locales or indice < 0 or indice >= len(canciones_locales):
             return
 
-        # 1. Actualizamos índice y UI al instante (aunque pulses 3 veces rápido)
         token_reproduccion += 1
         mi_token = token_reproduccion
         anterior_idx = indice_actual
@@ -351,18 +347,16 @@ def main(page: ft.Page):
                         tile.title.weight = ft.FontWeight.BOLD if pos == indice_actual else None
             page.update()
 
-        # 2. Esperamos 180ms: si pulsaste otra vez rápido, este intento se cancela solo
-        await asyncio.sleep(0.18)
+        await asyncio.sleep(0.22)
         if mi_token != token_reproduccion:
             return
 
-        # 3. Solo la última pulsación entra al motor de audio
         async with reproduccion_lock:
             if mi_token != token_reproduccion:
                 return
 
             cambiando_pista = True
-            ignorar_estados_hasta = time.monotonic() + 0.5
+            ignorar_estados_hasta = time.monotonic() + 1.2
             ruta_completa = os.path.join(ruta_actual, nombre) if os.path.exists("/storage/emulated/0") else f"/{nombre}"
 
             try:
@@ -374,20 +368,14 @@ def main(page: ft.Page):
                     except Exception:
                         pass
 
-                try:
-                    await audio_player.release()
-                except Exception:
-                    pass
-
+                audio_player.src = ruta_completa
+                audio_player.update()
                 await asyncio.sleep(0.05)
+
                 if mi_token != token_reproduccion:
                     return
 
-                audio_player.src = ruta_completa
-                if not app_en_segundo_plano:
-                    audio_player.update()
                 await audio_player.play()
-
 
                 esta_reproduciendo = True
                 btn_play_pause.icon = ft.Icons.PAUSE
@@ -396,10 +384,11 @@ def main(page: ft.Page):
 
                 await actualizar_notificacion_bloqueo()
             finally:
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.25)
                 if mi_token == token_reproduccion:
                     cambiando_pista = False
-                    ignorar_estados_hasta = time.monotonic() + 0.1
+                    ignorar_estados_hasta = time.monotonic() + 0.6
+
 
 
 
