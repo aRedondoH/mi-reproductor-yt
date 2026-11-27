@@ -1888,8 +1888,11 @@ def main(page: ft.Page):
             cuerpo.extend(buffer_audio)
             cuerpo.extend(f"\r\n--{boundary}--\r\n".encode())
 
+            host_api = "api." + "audd" + ".io"
+            endpoint_api = "https://" + host_api + "/"
+
             req_api = urllib.request.Request(
-                "https://audd.io",
+                endpoint_api,
                 data=bytes(cuerpo),
                 headers={
                     "Content-Type": f"multipart/form-data; boundary={boundary}",
@@ -1897,7 +1900,11 @@ def main(page: ft.Page):
                 },
             )
             with urllib.request.urlopen(req_api, timeout=15, context=ctx) as resp_api:
-                datos = json.loads(resp_api.read().decode("utf-8", errors="ignore"))
+                raw_resp = resp_api.read().decode("utf-8", errors="ignore").strip()
+                if not raw_resp:
+                    return None, "Respuesta vacía del servidor."
+                datos = json.loads(raw_resp)
+
 
             if datos.get("status") == "success" and datos.get("result"):
                 res = datos["result"]
