@@ -1,16 +1,13 @@
 # 🎵 AR Player
 
-> Reproductor ligero para Android con soporte para descarga de listas de reproducción de Youtxbx SIN PUBLICIDAD :-).
+> Reproductor ligero para Android con soporte para descarga de listas de reproducción de Youtxbx, SIN PUBLICIDAD :-).
 
 ---
 
 ## 📲 Descargar para Android
-Obtén la última versión estable directamente en tu móvil sin necesitar cuenta en GitHub:
+Obtén la última versión estable:
 
-[![Descargar APK](https://shields.io)](https://github.com)
-
-*(También puedes abrir la [página de la versión v1.0.0](https://github.com/aRedondoH/mi-reproductor-yt/releases/tag/v1.0.0) para elegir el archivo).*
-
+[![Descargar APK](https://shields.io)](https://github.com/aRedondoH/mi-reproductor-yt/releases/tag/v1.0.0)
 
 ### Cómo instalarla
 1. Pulsa el botón verde **Descargar APK** (la descarga empezará al instante).
